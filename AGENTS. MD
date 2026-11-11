@@ -1,0 +1,9 @@
+#  Redux/Redux-Saga  Pi  Agent 
+
+本项目参照 Pi Agent  的代码， 最终想实现 以Redux/Redux-Saga  管理 状态的增强 
+
+##  步骤
+
+1.  首先修剪代码，一个最小的化的 pi  agents 
+2.  状态管理包括状态变更统一用redux/reudx-saga管理。 
+3.  引入多Agents的协同。 首先构建一个单一流水线的agents工作协同
