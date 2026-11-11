@@ -20,7 +20,7 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 import type { Message } from "../types.ts";
-import { agentInterrupt, agentSubmit } from "../store/actions.ts";
+import { agentInterrupt, agentRetry, agentSubmit } from "../store/actions.ts";
 import type { AgentState } from "../store/reducer.ts";
 import type { AgentStore } from "../store/index.ts";
 
@@ -97,6 +97,7 @@ class TuiView {
 	private renderedMessages = 0;
 	private lastStatus: AgentState["status"] = "idle";
 	private lastStatusText = "";
+	private renderedStage: string | null = null;
 	private finish?: () => void;
 	private unsubscribe?: () => void;
 
@@ -126,6 +127,10 @@ class TuiView {
 					return;
 				}
 				if (this.store.getState().status === "running") return;
+				if (input === "retry") {
+					this.store.dispatch(agentRetry());
+					return;
+				}
 				this.store.dispatch(agentSubmit(input));
 			};
 
@@ -170,6 +175,29 @@ class TuiView {
 			}
 			this.stream.setText(state.streamingText);
 			dirty = true;
+		}
+
+		const activeIndex = state.pipeline.activeIndex;
+		if (activeIndex === null) {
+			this.renderedStage = null;
+		} else {
+			const stage = state.pipeline.stages[activeIndex];
+			const attempt = stage?.attempt ?? 1;
+			const stageKey = `${activeIndex}:${attempt}`;
+			if (stageKey !== this.renderedStage) {
+				if (stage && state.pipeline.stages.length > 1) {
+					const retry = attempt > 1 ? ` · retry ${attempt}` : "";
+					this.insertBeforeEditor(
+						new Text(
+							cyan(`── [${activeIndex + 1}/${state.pipeline.stages.length}] ${stage.name}${retry} ──`),
+							1,
+							1,
+						),
+					);
+					dirty = true;
+				}
+				this.renderedStage = stageKey;
+			}
 		}
 
 		if (state.status !== this.lastStatus || state.error) {
@@ -225,8 +253,11 @@ class TuiView {
 		if (state.error) return red(`● error · ${state.error}`);
 
 		if (state.status === "running") {
+			const stage = state.pipeline.stages[state.pipeline.activeIndex ?? -1];
+			const retry = stage && (stage.attempt ?? 1) > 1 ? ` · retry ${stage.attempt}` : "";
+			const stageLabel = stage ? `${stage.name}${retry} · ` : "";
 			const tool = state.tool ? ` · ${state.tool.name}(${summarizeArgs(state.tool.args)})` : "";
-			return `${yellow("●")} running · turn ${state.turn}${tool} · ${state.stats.toolCalls} tools`;
+			return `${yellow("●")} running · ${stageLabel}turn ${state.turn}${tool} · ${state.stats.toolCalls} tools`;
 		}
 
 		return `${dim("●")} idle · turn ${state.turn} · ${state.stats.toolCalls} tools`;

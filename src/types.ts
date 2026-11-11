@@ -69,8 +69,7 @@ export interface ToolResult {
 	isError?: boolean;
 }
 
-/**
- * 工具定义。
+/** 工具定义。
  * `parameters` 使用 JSON Schema 描述，直接透传给 provider。
  */
 export interface AgentTool {
@@ -80,6 +79,24 @@ export interface AgentTool {
 	/** UI / 日志用的简短名称。 */
 	label: string;
 	execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult>;
+}
+
+/** 流水线中的角色。 */
+export type AgentRole = "planner" | "executor" | "reviewer";
+
+/** 一个流水线阶段的运行配置。 */
+export interface StageRuntime {
+	role: AgentRole;
+	name: string;
+	systemPrompt: string;
+	tools: AgentTool[];
+}
+
+/** 阶段的静态描述，用于在 store 中提前占位。 */
+export interface StageDescriptor {
+	index: number;
+	role: AgentRole;
+	name: string;
 }
 
 /** Agent 循环对外发出的事件，后续接入 Redux/Saga 时直接消费这些事件。 */

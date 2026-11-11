@@ -2,15 +2,13 @@
 
 import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline/promises";
-import { buildSystemPrompt } from "./agent/prompt.ts";
+import { createPipeline, createSingleStage } from "./agent/pipeline.ts";
 import { attachRenderer } from "./cli/renderer.ts";
 import { attachTui } from "./cli/tui.ts";
 import { loadConfig } from "./config.ts";
-import { agentInterrupt, agentSubmit } from "./store/actions.ts";
+import { agentInterrupt, agentRetry, agentSubmit } from "./store/actions.ts";
 import { loadDevtoolsEnhancer } from "./store/devtools.ts";
 import { createAgentStore } from "./store/index.ts";
-import { createFileTools } from "./tools/file-tools.ts";
-import { createShellTool } from "./tools/shell-tool.ts";
 
 const cwd = process.cwd();
 const config = loadConfig();
@@ -18,6 +16,7 @@ const config = loadConfig();
 const argv = process.argv.slice(2);
 const devtoolsEnabled = argv.includes("--devtools") || process.env.REDUX_DEVTOOLS === "1";
 const tuiEnabled = argv.includes("--tui") && stdout.isTTY === true;
+const singleAgent = argv.includes("--single");
 const parsedDevtoolsPort = Number.parseInt(process.env.REDUX_DEVTOOLS_PORT ?? "", 10);
 const devtoolsPort = Number.isFinite(parsedDevtoolsPort) ? parsedDevtoolsPort : 8000;
 
@@ -26,9 +25,9 @@ const store = createAgentStore(
 		apiKey: config.apiKey,
 		baseUrl: config.baseUrl,
 		model: config.model,
-		systemPrompt: buildSystemPrompt(cwd),
-		tools: [...createFileTools(cwd), createShellTool(cwd)],
+		stages: singleAgent ? [createSingleStage(cwd)] : createPipeline(cwd),
 		maxTurns: 30,
+		maxAttempts: 2,
 	},
 	{ enhancer: await loadDevtoolsEnhancer({ enabled: devtoolsEnabled, port: devtoolsPort }) },
 );
@@ -40,8 +39,8 @@ if (devtoolsEnabled) {
 	stdout.write(`Redux DevTools: 先运行 "npm run devtools"，再打开 http://127.0.0.1:${devtoolsPort}\n`);
 }
 
-/** dispatch 一次提交，等 Saga 把状态带回非 running 再返回。 */
-function runPrompt(input: string): Promise<void> {
+/** dispatch 一次任务，等 Saga 把状态带回非 running 再返回。 */
+function dispatchAndWait(action: Parameters<typeof store.dispatch>[0]): Promise<void> {
 	return new Promise((resolve) => {
 		let started = false;
 		const unsubscribe = store.subscribe(() => {
@@ -56,8 +55,16 @@ function runPrompt(input: string): Promise<void> {
 			}
 		});
 
-		store.dispatch(agentSubmit(input));
+		store.dispatch(action);
 	});
+}
+
+function runPrompt(input: string): Promise<void> {
+	return dispatchAndWait(agentSubmit(input));
+}
+
+function runRetry(): Promise<void> {
+	return dispatchAndWait(agentRetry());
 }
 
 async function runOneShot(input: string): Promise<void> {
@@ -79,7 +86,7 @@ async function runRepl(): Promise<void> {
 
 	stdout.write(`Mini Pi Agents · ${config.model}\n`);
 	stdout.write(`cwd: ${cwd}\n`);
-	stdout.write(`输入 "exit" 退出，Ctrl+C 中断当前任务。\n`);
+	stdout.write(`输入 "exit" 退出，Ctrl+C 中断当前任务，"retry" 重跑上一次任务。\n`);
 
 	try {
 		for (;;) {
@@ -93,6 +100,11 @@ async function runRepl(): Promise<void> {
 			const input = line.trim();
 			if (input.length === 0) continue;
 			if (input === "exit" || input === "quit") break;
+
+			if (input === "retry") {
+				await runRetry();
+				continue;
+			}
 
 			await runPrompt(input);
 		}
@@ -114,7 +126,10 @@ function shutdown(code: number): void {
 	if (devtoolsEnabled) process.exit(code);
 }
 
-const oneShotInput = argv.filter((arg) => arg !== "--devtools" && arg !== "--tui").join(" ").trim();
+const oneShotInput = argv
+	.filter((arg) => arg !== "--devtools" && arg !== "--tui" && arg !== "--single")
+	.join(" ")
+	.trim();
 if (oneShotInput.length > 0) {
 	await runOneShot(oneShotInput);
 } else if (tuiEnabled) {

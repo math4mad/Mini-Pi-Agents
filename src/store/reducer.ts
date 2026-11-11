@@ -1,22 +1,44 @@
 /** 纯 reducer：只做状态计算，不产生任何 IO。 */
 
-import type { Message } from "../types.ts";
+import type { Message, StageDescriptor } from "../types.ts";
 import {
 	AGENT_ABORTED,
 	AGENT_ENDED,
 	AGENT_ERROR,
 	AGENT_INTERRUPT,
 	AGENT_MESSAGE_ADDED,
+	AGENT_RETRY,
 	AGENT_SUBMIT,
 	AGENT_TEXT_DELTA,
 	AGENT_TURN_ENDED,
 	AGENT_TURN_STARTED,
+	PIPELINE_STARTED,
+	STAGE_ENDED,
+	STAGE_FAILED,
+	STAGE_STARTED,
 	TOOL_ENDED,
 	TOOL_STARTED,
 	type AgentAction,
 } from "./actions.ts";
 
 export type AgentStatus = "idle" | "running" | "error";
+
+export type StageStatus = "pending" | "running" | "done" | "error" | "aborted";
+
+export interface PipelineStageState extends StageDescriptor {
+	status: StageStatus;
+	/** 当前是第几次尝试；Reviewer 打回后 Executor 会再次执行。 */
+	attempt?: number;
+	/** 该阶段最后一条消息，作为下一阶段的输入。 */
+	output?: string;
+	error?: string;
+}
+
+export interface PipelineState {
+	stages: PipelineStageState[];
+	/** 正在执行的阶段下标；空闲时为 null。 */
+	activeIndex: number | null;
+}
 
 export interface ToolActivity {
 	id: string;
@@ -37,6 +59,7 @@ export interface AgentState {
 	tool: ToolActivity | null;
 	error: string | null;
 	stats: { toolCalls: number };
+	pipeline: PipelineState;
 }
 
 export const initialState: AgentState = {
@@ -47,6 +70,7 @@ export const initialState: AgentState = {
 	tool: null,
 	error: null,
 	stats: { toolCalls: 0 },
+	pipeline: { stages: [], activeIndex: null },
 };
 
 export function agentReducer(state: AgentState = initialState, action: AgentAction): AgentState {
@@ -61,6 +85,7 @@ export function agentReducer(state: AgentState = initialState, action: AgentActi
 				tool: null,
 				error: null,
 				stats: { toolCalls: 0 },
+				pipeline: { stages: [], activeIndex: null },
 			};
 
 		case AGENT_TURN_STARTED:
@@ -98,14 +123,96 @@ export function agentReducer(state: AgentState = initialState, action: AgentActi
 				},
 			};
 
+		case PIPELINE_STARTED:
+			return {
+				...state,
+				pipeline: {
+					stages: action.payload.stages.map((stage) => ({ ...stage, status: "pending" as const })),
+					activeIndex: null,
+				},
+			};
+
+		case STAGE_STARTED:
+			return {
+				...state,
+				turn: 0,
+				streamingText: "",
+				tool: null,
+				pipeline: {
+					...state.pipeline,
+					activeIndex: action.payload.index,
+					stages: state.pipeline.stages.map((stage) =>
+						stage.index === action.payload.index
+							? {
+									...stage,
+									status: "running" as const,
+									attempt: action.payload.attempt ?? stage.attempt ?? 1,
+								}
+							: stage,
+					),
+				},
+			};
+
+		case STAGE_ENDED:
+			return {
+				...state,
+				pipeline: {
+					...state.pipeline,
+					stages: state.pipeline.stages.map((stage) =>
+						stage.index === action.payload.index
+							? { ...stage, status: "done" as const, output: action.payload.output }
+							: stage,
+					),
+				},
+			};
+
+		case STAGE_FAILED:
+			return {
+				...state,
+				pipeline: {
+					...state.pipeline,
+					stages: state.pipeline.stages.map((stage) =>
+						stage.index === action.payload.index
+							? { ...stage, status: "error" as const, error: action.payload.error }
+							: stage,
+					),
+				},
+			};
+
+		case AGENT_RETRY:
+			return {
+				...state,
+				status: "running",
+				error: null,
+				streamingText: "",
+				tool: null,
+				pipeline: { stages: [], activeIndex: null },
+			};
+
 		case AGENT_ERROR:
 			return { ...state, status: "error", error: action.payload.message };
 
 		case AGENT_ENDED:
 			return { ...state, status: state.status === "error" ? "error" : "idle" };
 
-		case AGENT_ABORTED:
-			return { ...state, status: "idle", error: "已取消本次任务" };
+		case AGENT_ABORTED: {
+			const activeIndex = state.pipeline.activeIndex;
+			return {
+				...state,
+				status: "idle",
+				error: "已取消本次任务",
+				pipeline: {
+					...state.pipeline,
+					activeIndex: null,
+					stages:
+						activeIndex === null
+							? state.pipeline.stages
+							: state.pipeline.stages.map((stage) =>
+									stage.index === activeIndex ? { ...stage, status: "aborted" as const } : stage,
+								),
+				},
+			};
+		}
 
 		case AGENT_INTERRUPT:
 			// 中断由 Saga 处理，reducer 只关心最终落到的 AGENT_ABORTED。

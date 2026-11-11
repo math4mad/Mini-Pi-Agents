@@ -11,8 +11,33 @@ export function attachRenderer(store: AgentStore): () => void {
 	let lastToolStatus: ToolActivity["status"] | null = null;
 	let printedError = false;
 	let wasRunning = false;
+	let renderedStage: string | null = null;
 
 	const render = (state: AgentState): void => {
+		// 阶段切换（含返工重试）：打印分隔条，避免多 Agent 输出混在一起。
+		const activeIndex = state.pipeline.activeIndex;
+		if (activeIndex === null) {
+			renderedStage = null;
+		} else {
+			const stage = state.pipeline.stages[activeIndex];
+			const attempt = stage?.attempt ?? 1;
+			const stageKey = `${activeIndex}:${attempt}`;
+			if (stageKey !== renderedStage) {
+				if (printedChars > 0) {
+					stdout.write("\n");
+					printedChars = 0;
+				}
+				// 单 Agent 模式只有一个阶段，不需要分隔条。
+				if (stage && state.pipeline.stages.length > 1) {
+					const retry = attempt > 1 ? ` · retry ${attempt}` : "";
+					stdout.write(
+						`\n\x1b[36m── [${activeIndex + 1}/${state.pipeline.stages.length}] ${stage.name}${retry} ──\x1b[0m\n`,
+					);
+				}
+				renderedStage = stageKey;
+			}
+		}
+
 		// 新的一轮：先给上一段文本收尾。
 		if (state.turn !== renderedTurn) {
 			if (printedChars > 0) {
