@@ -229,6 +229,8 @@ export function createWorkerSaga(runtime: AgentRuntime, options: WorkerOptions) 
 
 		const client = new RemoteClient(url);
 		const byRole = new Map(runtime.stages.map((stage) => [stage.role, stage]));
+		// 每个任务只初始化一次流水线；重复 dispatch 会把已完成阶段重置为 pending。
+		const announced = new Set<string>();
 
 		try {
 			while (true) {
@@ -265,7 +267,10 @@ export function createWorkerSaga(runtime: AgentRuntime, options: WorkerOptions) 
 					}
 					worked = true;
 
-					yield put(pipelineStarted(descriptorsOf(stages)));
+					if (!announced.has(task.id)) {
+						announced.add(task.id);
+						yield put(pipelineStarted(descriptorsOf(stages)));
+					}
 
 					const stageRuntime = byRole.get(next.role as AgentRole);
 					if (!stageRuntime) {

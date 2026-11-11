@@ -13,6 +13,7 @@
 		"tui": "node --env-file=.env src/index.ts --tui",
 		"devtools": "redux-devtools --port 8000",
 		"poc": "node poc/run.ts",
+		"test": "node --test",
 		"typecheck": "tsc --noEmit"
 	},
 	"devDependencies": {
