@@ -12,11 +12,15 @@
 		"dev": "node --env-file=.env src/index.ts",
 		"tui": "node --env-file=.env src/index.ts --tui",
 		"devtools": "redux-devtools --port 8000",
+		"poc": "node poc/run.ts",
 		"typecheck": "tsc --noEmit"
 	},
 	"devDependencies": {
 		"@redux-devtools/cli": "^4.0.3",
 		"@types/node": "^24.10.1",
+		"graphql": "^16.15.0",
+		"graphql-sse": "^2.6.3",
+		"graphql-yoga": "^6.0.1",
 		"typescript": "^5.9.3"
 	},
 	"dependencies": {
