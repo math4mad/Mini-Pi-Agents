@@ -5,11 +5,12 @@
 	"type": "module",
 	"description": "Minimal Pi-style coding agent with Redux/Redux-Saga state management",
 	"engines": {
-		"node": ">=22.18.0"
+		"node": ">=22.19.0"
 	},
 	"scripts": {
 		"start": "node --env-file=.env src/index.ts",
 		"dev": "node --env-file=.env src/index.ts",
+		"tui": "node --env-file=.env src/index.ts --tui",
 		"devtools": "redux-devtools --port 8000",
 		"typecheck": "tsc --noEmit"
 	},
@@ -19,6 +20,7 @@
 		"typescript": "^5.9.3"
 	},
 	"dependencies": {
+		"@earendil-works/pi-tui": "^1.5.2",
 		"@redux-devtools/remote": "^1.0.2",
 		"redux": "^5.0.1",
 		"redux-saga": "^1.5.1"

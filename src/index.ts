@@ -4,6 +4,7 @@ import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline/promises";
 import { buildSystemPrompt } from "./agent/prompt.ts";
 import { attachRenderer } from "./cli/renderer.ts";
+import { attachTui } from "./cli/tui.ts";
 import { loadConfig } from "./config.ts";
 import { agentInterrupt, agentSubmit } from "./store/actions.ts";
 import { loadDevtoolsEnhancer } from "./store/devtools.ts";
@@ -16,6 +17,7 @@ const config = loadConfig();
 
 const argv = process.argv.slice(2);
 const devtoolsEnabled = argv.includes("--devtools") || process.env.REDUX_DEVTOOLS === "1";
+const tuiEnabled = argv.includes("--tui") && stdout.isTTY === true;
 const parsedDevtoolsPort = Number.parseInt(process.env.REDUX_DEVTOOLS_PORT ?? "", 10);
 const devtoolsPort = Number.isFinite(parsedDevtoolsPort) ? parsedDevtoolsPort : 8000;
 
@@ -31,7 +33,8 @@ const store = createAgentStore(
 	{ enhancer: await loadDevtoolsEnhancer({ enabled: devtoolsEnabled, port: devtoolsPort }) },
 );
 
-attachRenderer(store);
+// TUI 自己负责渲染，二者不能同时挂载，否则输出会互相覆盖。
+if (!tuiEnabled) attachRenderer(store);
 
 if (devtoolsEnabled) {
 	stdout.write(`Redux DevTools: 先运行 "npm run devtools"，再打开 http://127.0.0.1:${devtoolsPort}\n`);
@@ -100,11 +103,22 @@ async function runRepl(): Promise<void> {
 	shutdown(store.getState().status === "error" ? 1 : 0);
 }
 
+async function runTui(): Promise<void> {
+	await attachTui(store, { model: config.model, cwd });
+	shutdown(store.getState().status === "error" ? 1 : 0);
+}
+
 /** DevTools 的 socket 会持续占用事件循环，启用时需要显式退出。 */
 function shutdown(code: number): void {
 	process.exitCode = code;
 	if (devtoolsEnabled) process.exit(code);
 }
 
-const oneShotInput = argv.filter((arg) => arg !== "--devtools").join(" ").trim();
-await (oneShotInput.length > 0 ? runOneShot(oneShotInput) : runRepl());
+const oneShotInput = argv.filter((arg) => arg !== "--devtools" && arg !== "--tui").join(" ").trim();
+if (oneShotInput.length > 0) {
+	await runOneShot(oneShotInput);
+} else if (tuiEnabled) {
+	await runTui();
+} else {
+	await runRepl();
+}
