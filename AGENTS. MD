@@ -4,6 +4,17 @@
 
 ##  步骤
 
-1.  首先修剪代码，一个最小的化的 pi  agents 
+1.  首先修剪代码，构建一个最小的化的 pi  agents ， 登录和Provider 取消。 直接用.env的Provider就好 
 2.  状态管理包括状态变更统一用redux/reudx-saga管理。 
 3.  引入多Agents的协同。 首先构建一个单一流水线的agents工作协同
+
+
+##  Instruction 
+
+仍以TS 为标准语言
+
+##  参考
+
+源码：/Users/mac/Programming/pi-sourcecode
+
+ https://hochej.github.io/pi-mono/

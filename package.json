@@ -1,0 +1,29 @@
+{
+	"name": "mini-pi-agents",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "Minimal Pi-style coding agent with Redux/Redux-Saga state management",
+	"engines": {
+		"node": ">=22.18.0"
+	},
+	"scripts": {
+		"start": "node --env-file=.env src/index.ts",
+		"dev": "node --env-file=.env src/index.ts",
+		"devtools": "redux-devtools --port 8000",
+		"typecheck": "tsc --noEmit"
+	},
+	"devDependencies": {
+		"@redux-devtools/cli": "^4.0.3",
+		"@types/node": "^24.10.1",
+		"typescript": "^5.9.3"
+	},
+	"dependencies": {
+		"@redux-devtools/remote": "^1.0.2",
+		"redux": "^5.0.1",
+		"redux-saga": "^1.5.1"
+	},
+	"allowScripts": {
+		"sqlite3@5.1.7": true
+	}
+}
