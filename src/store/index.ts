@@ -9,6 +9,8 @@ import { createAgentSaga, type AgentRuntime } from "./sagas.ts";
 export interface AgentStoreOptions {
 	/** 可选的 store 增强器，例如 Redux DevTools。 */
 	enhancer?: StoreEnhancer;
+	/** 替换根 Saga：远端协调者 / 工作节点模式使用。 */
+	saga?: () => Generator;
 }
 
 export function createAgentStore(
@@ -22,7 +24,7 @@ export function createAgentStore(
 		: middleware;
 
 	const store = createStore(agentReducer, initialState, enhancer);
-	sagaMiddleware.run(createAgentSaga(runtime));
+	sagaMiddleware.run(options.saga ?? createAgentSaga(runtime));
 	return store as Store<AgentState, AgentAction>;
 }
 

@@ -14,6 +14,7 @@ import {
 	AGENT_ENDED,
 	AGENT_INTERRUPT,
 	AGENT_ABORTED,
+	WORKER_START,
 	agentSubmit,
 	agentTurnStarted,
 	agentTextDelta,
@@ -25,6 +26,7 @@ import {
 	agentEnded,
 	agentInterrupt,
 	agentAborted,
+	workerStart,
 	type AgentAction,
 } from "./actions.ts";
 
@@ -204,8 +206,9 @@ describe("AgentAction type union", () => {
 			agentEnded(),
 			agentInterrupt(),
 			agentAborted(),
+			workerStart(),
 		];
 
-		assert.strictEqual(actions.length, 11);
+		assert.strictEqual(actions.length, 12);
 	});
 });

@@ -18,6 +18,7 @@ import {
 	STAGE_STARTED,
 	TOOL_ENDED,
 	TOOL_STARTED,
+	WORKER_START,
 	type AgentAction,
 } from "./actions.ts";
 
@@ -186,6 +187,18 @@ export function agentReducer(state: AgentState = initialState, action: AgentActi
 				error: null,
 				streamingText: "",
 				tool: null,
+				pipeline: { stages: [], activeIndex: null },
+			};
+
+		case WORKER_START:
+			return {
+				...state,
+				status: "running",
+				turn: 0,
+				streamingText: "",
+				tool: null,
+				error: null,
+				stats: { toolCalls: 0 },
 				pipeline: { stages: [], activeIndex: null },
 			};
 

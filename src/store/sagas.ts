@@ -58,7 +58,7 @@ export interface AgentRuntime {
 
 type StreamEvent = { type: "delta"; text: string } | { type: "done"; message: AssistantMessage };
 
-interface StageOutcome {
+export interface StageOutcome {
 	output: string;
 	error: string | null;
 }
@@ -212,7 +212,7 @@ function* runStageFlow(
 }
 
 /** 单个阶段的 Agent 循环：模型响应 -> 工具执行 -> 结果回灌。 */
-function* runStage(
+export function* runStage(
 	runtime: AgentRuntime,
 	stage: StageRuntime,
 	messages: Message[],

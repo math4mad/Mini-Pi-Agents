@@ -16,6 +16,9 @@ export const AGENT_ABORTED = "agent/aborted";
 /** 手动重试：重跑上一次提交的完整任务。 */
 export const AGENT_RETRY = "agent/retry";
 
+/** 工作节点启动：开始从远端协调者领取阶段。 */
+export const WORKER_START = "worker/start";
+
 /** 流水线生命周期：阶段列表在提交时占位，Saga 逐个推进。 */
 export const PIPELINE_STARTED = "pipeline/started";
 export const STAGE_STARTED = "pipeline/stageStarted";
@@ -60,6 +63,8 @@ export const agentAborted = () => ({ type: AGENT_ABORTED }) as const;
 
 export const agentRetry = () => ({ type: AGENT_RETRY }) as const;
 
+export const workerStart = () => ({ type: WORKER_START }) as const;
+
 export const pipelineStarted = (stages: StageDescriptor[]) => ({ type: PIPELINE_STARTED, payload: { stages } }) as const;
 
 export const stageStarted = (stage: StageDescriptor & { attempt?: number }) =>
@@ -84,6 +89,7 @@ export type AgentAction =
 	| ReturnType<typeof agentInterrupt>
 	| ReturnType<typeof agentAborted>
 	| ReturnType<typeof agentRetry>
+	| ReturnType<typeof workerStart>
 	| ReturnType<typeof pipelineStarted>
 	| ReturnType<typeof stageStarted>
 	| ReturnType<typeof stageEnded>

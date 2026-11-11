@@ -138,8 +138,11 @@ const schema = createSchema({
 		}
 		type Query {
 			task(id: ID!): Task
+			tasks: [Task!]!
+			stage(id: ID!): Stage
 			stages(taskId: ID!): [Stage!]!
 			events(since: Int!): [Event!]!
+			lastSeq: Int!
 		}
 		type Subscription {
 			event(since: Int): Event!
@@ -153,12 +156,15 @@ const schema = createSchema({
 	resolvers: {
 		Query: {
 			task: (_parent: unknown, { id }: { id: string }) => tasks.get(id) ?? null,
+			tasks: () => [...tasks.values()],
+			stage: (_parent: unknown, { id }: { id: string }) => stages.get(id) ?? null,
 			stages: (_parent: unknown, { taskId }: { taskId: string }) =>
 				[...stages.values()]
 					.filter((stage) => stage.taskId === taskId)
 					.sort((a, b) => a.index - b.index),
 			events: (_parent: unknown, { since }: { since: number }) =>
 				events.filter((event) => event.seq > since),
+			lastSeq: () => seq,
 		},
 		Subscription: {
 			event: {
@@ -211,6 +217,16 @@ const schema = createSchema({
 				if (stage.status === "done" || stage.status === "error") {
 					throw new Error("stage already finished");
 				}
+				// 流水线顺序保护：前序阶段未完成时不允许抢占后续阶段。
+				const blocking = [...stages.values()].find(
+					(candidate) =>
+						candidate.taskId === stage.taskId &&
+						candidate.index < stage.index &&
+						candidate.status !== "done",
+				);
+				if (blocking) {
+					throw new Error(`previous stage ${blocking.index} is not finished`);
+				}
 				if (stage.owner !== null && stage.owner !== machineId && leaseActive(stage)) {
 					throw new Error(`stage is leased by ${stage.owner}`);
 				}
@@ -220,6 +236,7 @@ const schema = createSchema({
 				stage.status = "running";
 				stage.version += 1;
 				publish("stage.claimed", {
+					taskId: stage.taskId,
 					stageId,
 					machineId,
 					version: stage.version,
@@ -246,7 +263,12 @@ const schema = createSchema({
 				stage.owner = null;
 				stage.leaseExpiresAt = 0;
 				stage.version += 1;
-				publish("stage.finished", { stageId, status, version: stage.version });
+				publish("stage.finished", {
+					taskId: stage.taskId,
+					stageId,
+					status,
+					version: stage.version,
+				});
 				settleTask(stage.taskId);
 				return stage;
 			},

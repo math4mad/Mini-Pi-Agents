@@ -6,37 +6,69 @@ import { createPipeline, createSingleStage } from "./agent/pipeline.ts";
 import { attachRenderer } from "./cli/renderer.ts";
 import { attachTui } from "./cli/tui.ts";
 import { loadConfig } from "./config.ts";
-import { agentInterrupt, agentRetry, agentSubmit } from "./store/actions.ts";
+import { agentInterrupt, agentRetry, agentSubmit, workerStart } from "./store/actions.ts";
 import { loadDevtoolsEnhancer } from "./store/devtools.ts";
 import { createAgentStore } from "./store/index.ts";
+import { createRemoteSaga, createWorkerSaga } from "./store/remote.ts";
+import { createAgentSaga, type AgentRuntime } from "./store/sagas.ts";
 
 const cwd = process.cwd();
 const config = loadConfig();
 
 const argv = process.argv.slice(2);
 const devtoolsEnabled = argv.includes("--devtools") || process.env.REDUX_DEVTOOLS === "1";
-const tuiEnabled = argv.includes("--tui") && stdout.isTTY === true;
 const singleAgent = argv.includes("--single");
+const exitOnIdle = argv.includes("--exit-on-idle");
+const remoteEnabled = argv.includes("--remote");
+const workerFlagIndex = argv.indexOf("--worker");
+const workerId =
+	workerFlagIndex >= 0
+		? (argv[workerFlagIndex + 1] ?? null)
+		: (argv.find((arg) => arg.startsWith("--worker="))?.slice("--worker=".length) ?? null);
+const graphqlUrl = process.env.GRAPHQL_URL ?? "http://127.0.0.1:4123/graphql";
+// 工作节点是非交互进程，不挂 TUI。
+const tuiEnabled = argv.includes("--tui") && stdout.isTTY === true && workerId === null;
 const parsedDevtoolsPort = Number.parseInt(process.env.REDUX_DEVTOOLS_PORT ?? "", 10);
 const devtoolsPort = Number.isFinite(parsedDevtoolsPort) ? parsedDevtoolsPort : 8000;
 
-const store = createAgentStore(
-	{
-		apiKey: config.apiKey,
-		baseUrl: config.baseUrl,
-		model: config.model,
-		stages: singleAgent ? [createSingleStage(cwd)] : createPipeline(cwd),
-		maxTurns: 30,
-		maxAttempts: 2,
-	},
-	{ enhancer: await loadDevtoolsEnhancer({ enabled: devtoolsEnabled, port: devtoolsPort }) },
-);
+if (workerFlagIndex >= 0 && !workerId) {
+	stdout.write("用法：--worker <machine-id>，例如 --worker mac-mini\n");
+	process.exit(2);
+}
+
+const runtime: AgentRuntime = {
+	apiKey: config.apiKey,
+	baseUrl: config.baseUrl,
+	model: config.model,
+	stages: singleAgent ? [createSingleStage(cwd)] : createPipeline(cwd),
+	maxTurns: 30,
+	maxAttempts: 2,
+};
+
+// 远端模式只替换根 Saga，渲染层与 action 完全不变。
+const saga = workerId
+	? createWorkerSaga(runtime, {
+			url: graphqlUrl,
+			machineId: workerId,
+			exitOnIdle,
+		})
+	: remoteEnabled
+		? createRemoteSaga(runtime, { url: graphqlUrl })
+		: createAgentSaga(runtime);
+
+const store = createAgentStore(runtime, {
+	enhancer: await loadDevtoolsEnhancer({ enabled: devtoolsEnabled, port: devtoolsPort }),
+	saga,
+});
 
 // TUI 自己负责渲染，二者不能同时挂载，否则输出会互相覆盖。
 if (!tuiEnabled) attachRenderer(store);
 
 if (devtoolsEnabled) {
 	stdout.write(`Redux DevTools: 先运行 "npm run devtools"，再打开 http://127.0.0.1:${devtoolsPort}\n`);
+}
+if (remoteEnabled && !workerId) {
+	stdout.write(`远端协调者: ${graphqlUrl}\n`);
 }
 
 /** dispatch 一次任务，等 Saga 把状态带回非 running 再返回。 */
@@ -126,11 +158,30 @@ function shutdown(code: number): void {
 	if (devtoolsEnabled) process.exit(code);
 }
 
+const skipped = new Set<number>();
+argv.forEach((arg, index) => {
+	if (["--devtools", "--tui", "--single", "--remote", "--exit-on-idle"].includes(arg)) {
+		skipped.add(index);
+		return;
+	}
+	if (arg === "--worker") {
+		skipped.add(index);
+		skipped.add(index + 1);
+		return;
+	}
+	if (arg.startsWith("--worker=")) skipped.add(index);
+});
+
 const oneShotInput = argv
-	.filter((arg) => arg !== "--devtools" && arg !== "--tui" && arg !== "--single")
+	.filter((_arg, index) => !skipped.has(index))
 	.join(" ")
 	.trim();
-if (oneShotInput.length > 0) {
+
+if (workerId) {
+	stdout.write(`Worker ${workerId} · ${graphqlUrl}${exitOnIdle ? " · 完成后退出" : ""}\n`);
+	await dispatchAndWait(workerStart());
+	shutdown(store.getState().status === "error" ? 1 : 0);
+} else if (oneShotInput.length > 0) {
 	await runOneShot(oneShotInput);
 } else if (tuiEnabled) {
 	await runTui();
