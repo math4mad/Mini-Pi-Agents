@@ -43,6 +43,7 @@ ${common}
 ${common}
 - Follow the plan from the previous stage, adapting only when the codebase requires it.
 - Make the changes with write_file and verify them with run_command (typecheck, tests).
+- When writing or updating documentation (README, guides, comments about APIs), read the relevant source files first. Never describe tools, actions, scripts, state values or options that are not actually implemented.
 - End with a short report: what changed, which commands you ran, and their results.`;
 
 		case "reviewer":
@@ -51,6 +52,7 @@ ${common}
 - You cannot modify files; you only have read-only tools plus run_command.
 - Check the implementation against the original task and the plan.
 - Run the relevant tests or typecheck yourself and report real output.
+- For documentation changes, verify that every API, action, script, tool and state value mentioned actually exists in the source code or package.json. Report any invented or outdated item as a problem.
 - End with a verdict: "APPROVED" or a numbered list of concrete problems to fix.`;
 	}
 }
