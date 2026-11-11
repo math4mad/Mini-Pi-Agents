@@ -9,6 +9,7 @@ import { agentInterrupt, agentSubmit } from "./store/actions.ts";
 import { loadDevtoolsEnhancer } from "./store/devtools.ts";
 import { createAgentStore } from "./store/index.ts";
 import { createFileTools } from "./tools/file-tools.ts";
+import { createShellTool } from "./tools/shell-tool.ts";
 
 const cwd = process.cwd();
 const config = loadConfig();
@@ -24,7 +25,7 @@ const store = createAgentStore(
 		baseUrl: config.baseUrl,
 		model: config.model,
 		systemPrompt: buildSystemPrompt(cwd),
-		tools: createFileTools(cwd),
+		tools: [...createFileTools(cwd), createShellTool(cwd)],
 		maxTurns: 30,
 	},
 	{ enhancer: await loadDevtoolsEnhancer({ enabled: devtoolsEnabled, port: devtoolsPort }) },
