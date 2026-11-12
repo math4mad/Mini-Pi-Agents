@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /** CLI 入口：终端是唯一入口；状态全部走 Redux store，副作用全部走 Saga。 */
 
 import { stdin, stdout } from "node:process";
@@ -7,7 +8,7 @@ import { createInterface } from "node:readline/promises";
 import { createPipeline, createSingleStage } from "./agent/pipeline.ts";
 import { attachRenderer } from "./cli/renderer.ts";
 import { attachTui } from "./cli/tui.ts";
-import { loadConfig } from "./config.ts";
+import { loadConfig, loadDotEnv } from "./config.ts";
 import { agentInterrupt, agentRetry, agentSubmit, workerStart } from "./store/actions.ts";
 import { loadDevtoolsEnhancer } from "./store/devtools.ts";
 import { createAgentStore, type AgentStore } from "./store/index.ts";
@@ -18,6 +19,8 @@ import { openSessionAdapter } from "./session/adapter.ts";
 import { createSandbox } from "./tools/sandbox.ts";
 
 const cwd = process.cwd();
+// 全局安装时没有 `node --env-file`，由程序自己读工作目录下的 .env。
+loadDotEnv(cwd);
 const config = loadConfig();
 
 const argv = process.argv.slice(2);

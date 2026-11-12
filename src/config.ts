@@ -1,5 +1,8 @@
 /** 从环境变量读取运行配置；不处理登录 / 多 provider，只认 .env。 */
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
 export interface AppConfig {
 	apiKey: string;
 	baseUrl: string;
@@ -7,6 +10,17 @@ export interface AppConfig {
 }
 
 const DEFAULT_BASE_URL = "https://openrouter.ai/api/v1";
+
+/**
+ * 读取工作目录下的 .env。
+ *
+ * 通过 `npm link` 全局安装后无法再依赖 `node --env-file`，因此由程序自己加载；
+ * 已存在的环境变量优先，不会被 .env 覆盖。
+ */
+export function loadDotEnv(cwd: string): void {
+	const path = join(cwd, ".env");
+	if (existsSync(path)) process.loadEnvFile(path);
+}
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 	const apiKey = readEnv(env, "OPENROUTER_API_KEY") ?? readEnv(env, "OPENAI_API_KEY");

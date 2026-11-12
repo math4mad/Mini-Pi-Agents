@@ -4,13 +4,16 @@
 	"private": true,
 	"type": "module",
 	"description": "Minimal Pi-style coding agent with Redux/Redux-Saga state management",
+	"bin": {
+		"mini-pi": "src/index.ts"
+	},
 	"engines": {
 		"node": ">=22.19.0"
 	},
 	"scripts": {
-		"start": "node --env-file=.env src/index.ts",
-		"dev": "node --env-file=.env src/index.ts",
-		"tui": "node --env-file=.env src/index.ts --tui",
+		"start": "node src/index.ts",
+		"dev": "node src/index.ts",
+		"tui": "node src/index.ts --tui",
 		"devtools": "redux-devtools --port 8000",
 		"poc": "node poc/run.ts",
 		"test": "node --test",

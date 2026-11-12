@@ -9,6 +9,7 @@ A minimal coding agent built with **Redux/Redux-Saga** for state management, run
 - **Redux/Redux-Saga** - All state changes and side effects managed through the Redux store and Sagas
 - **Multi-agent pipeline** - `Planner → Executor → Reviewer`, with automatic rework when the reviewer rejects
 - **Terminal-first** - CLI REPL, TUI mode, or one-shot execution
+- **pi Session backed** - One Session per task, persisted transcripts, `--resume` support
 - **Redux DevTools** - Real-time state inspection via browser DevTools
 - **Tool system** - File operations and shell commands via LLM function calling
 - **OpenRouter compatible** - Works with any OpenAI-compatible API
@@ -24,15 +25,18 @@ src/
 │   ├── renderer.ts        # CLI output renderer (non-TUI)
 │   └── tui.ts             # Terminal UI using @earendil-works/pi-tui
 ├── provider/
-│   └── openai.ts          # OpenAI-compatible streaming client
+│   └── openai.ts          # Streaming client built on pi-ai
+├── session/
+│   ├── adapter.ts         # pi Session adapter (open / prompt / tools / dispose)
+│   └── projection.ts      # pi Session events → Redux actions
 ├── store/
 │   ├── actions.ts         # Redux action creators
-│   ├── reducer.ts         # Redux reducer (messages, tool, pipeline stages)
-│   ├── sagas.ts           # Side effects: LLM calls, tool execution, rework, retry
+│   ├── reducer.ts         # Redux reducer (messages, tool, pipeline, session)
+│   ├── session-saga.ts    # Session-driven orchestration (one Session per task)
+│   ├── sagas.ts           # Legacy stream-based orchestration (remote mode)
 │   ├── devtools.ts        # Redux DevTools remote enhancer
 │   ├── index.ts           # Store factory
-│   ├── pipeline.test.ts   # Pipeline orchestration tests (fake model)
-│   └── *.test.ts          # Reducer / selector / store tests
+│   └── *.test.ts          # Orchestration / reducer / store tests
 ├── tools/
 │   ├── file-tools.ts      # read_file / write_file / list_files
 │   └── shell-tool.ts      # run_command
@@ -51,7 +55,13 @@ npm install
 
 ### 2. Configure environment
 
-Create `.env` in project root:
+```bash
+cp .env.example .env
+```
+
+The CLI loads `.env` from the current working directory on startup, so it works
+both from the repo and after a global install. Existing environment variables
+take precedence.
 
 ```env
 # Required
@@ -66,11 +76,23 @@ OPENAI_BASE_URL=https://openrouter.ai/api/v1
 REDUX_DEVTOOLS_PORT=8000
 ```
 
-### 3. Run
+### 3. Install the `mini-pi` command (optional)
+
+```bash
+npm link
+mini-pi "read package.json and summarize"
+```
+
+`npm link` installs the package globally from this checkout; run it in any
+project directory (that directory supplies `.env` and `.mini-pi/`).
+
+### 4. Run
 
 **One-shot (single prompt, then exit):**
 ```bash
 npm start "read package.json and summarize"
+# or, after `npm link`
+mini-pi "read package.json and summarize"
 ```
 
 **Interactive REPL:**
@@ -112,17 +134,21 @@ npm run dev -- --devtools
 
 | Command | Description |
 |---------|-------------|
-| `npm start "prompt"` | One-shot execution |
-| `npm start -- --single "prompt"` | One-shot without the multi-agent pipeline |
-| `npm run dev` | Interactive REPL |
-| `npm run dev -- --devtools` | REPL + DevTools |
+| `mini-pi "prompt"` / `npm start "prompt"` | One-shot execution |
+| `mini-pi --single "prompt"` | One-shot without the multi-agent pipeline |
+| `mini-pi` / `npm run dev` | Interactive REPL |
 | `npm run tui` | Terminal UI |
+| `mini-pi --resume <session.jsonl>` | Resume a saved Session |
+| `mini-pi --image <path> "prompt"` | Attach an image (repeatable) |
+| `npm run dev -- --devtools` | REPL + DevTools |
 | `npm run tui -- --devtools` | TUI + DevTools |
 | `npm run devtools` | Start DevTools server (port 8000) |
 | `npm run typecheck` | TypeScript type check |
-| `node --test src/store/*.test.ts` | Run unit tests |
+| `npm test` | Run all unit tests |
 
 In REPL or TUI, type `retry` to rerun the last task, `exit` to quit, and `Ctrl+C` to interrupt the running task.
+
+> `--remote` / `--worker` still use the legacy stream-based Saga and are experimental.
 
 ## Architecture
 
@@ -131,16 +157,22 @@ In REPL or TUI, type `retry` to rerun the last task, `exit` to quit, and `Ctrl+C
 ```
 User Input → agentSubmit(action) → Redux Store
     ↓
-Saga watches AGENT_SUBMIT / AGENT_INTERRUPT / AGENT_RETRY:
-  - Runs pipeline stages sequentially
-  - Calls the model and streams text deltas back as actions
-  - Executes tool calls and feeds results into the stage context
-  - Feeds reviewer feedback back to the executor on rejection
+Session Saga watches AGENT_SUBMIT / AGENT_INTERRUPT / AGENT_RETRY:
+  - Opens one pi Session per task
+  - Prompts it once per stage (planner → executor → reviewer)
+  - Narrows active tools before each stage prompt
+  - Appends reviewer feedback as a new prompt on rejection
+    ↓
+pi Session events → projection → Redux actions
     ↓
 Redux DevTools (optional) ← State changes
     ↓
 Renderer / TUI reads state → Terminal output
 ```
+
+Session transcripts live in `.mini-pi/sessions/*.jsonl` and are the source of
+truth; Redux only holds a projection. `--resume <file>` replays a transcript
+into the store before accepting new input.
 
 ### Multi-Agent Pipeline
 
@@ -154,8 +186,12 @@ Default pipeline (`createPipeline` in `src/agent/pipeline.ts`):
 
 Hand-off rules:
 
-- Each stage gets its own message context; tools and intermediate turns never leak across stages.
-- A stage's **final message** is passed to the next stage (plus the original task).
+- All stages share one pi Session; each stage is a separate prompt, so tool
+  calls and intermediate turns are visible to later stages.
+- The stage system prompt and the previous stage's **final message** are
+  injected with each prompt.
+- Only the tools a stage declares are active while it runs: planner and
+  reviewer are read-only, executor can write.
 - The reviewer must end with `APPROVED` to pass. Otherwise its output is fed back to the executor and both stages rerun, up to `maxAttempts` (default 2).
 - If attempts are exhausted, the reviewer stage is marked `error` and the task ends.
 
@@ -173,6 +209,11 @@ interface AgentState {
   pipeline: {
     stages: PipelineStageState[]; // status / attempt / output per stage
     activeIndex: number | null;
+  };
+  session: {                     // pi Session bound to the current task
+    taskId: string | null;
+    sessionId: string | null;
+    sessionFile: string | null;
   };
 }
 ```
@@ -208,10 +249,11 @@ interface AgentState {
 ## Testing
 
 ```bash
-node --test src/store/*.test.ts
+npm test
 ```
 
-The pipeline tests inject a fake `stream` function into `AgentRuntime`, so rework and retry are verified deterministically without network calls.
+The Session orchestration tests inject a fake `SessionDriver`, so stage order,
+rework, tool gating and retry are verified deterministically without network calls.
 
 ## TypeScript
 
@@ -223,7 +265,7 @@ Strict mode enabled. All source files use ES modules (`.ts` extensions in import
 
 ## Requirements
 
-- Node.js >= 22.19.0
+- Node.js >= 22.19.0 (the `mini-pi` bin runs TypeScript directly via type stripping)
 - OpenRouter or OpenAI API key
 
 ## License
