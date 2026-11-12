@@ -2,6 +2,8 @@
 
 A minimal coding agent built with **Redux/Redux-Saga** for state management, running in the terminal with optional TUI and Redux DevTools integration.
 
+> Part of the [Mini Pi](https://github.com/math4mad/mini-pi) project group — see the [architecture overview](https://github.com/math4mad/mini-pi/blob/main/index.html).
+
 ## Features
 
 - **Redux/Redux-Saga** - All state changes and side effects managed through the Redux store and Sagas
