@@ -20,6 +20,7 @@ import type {
 	ToolCallContent,
 	ToolResult,
 	ToolResultMessage,
+	UserMessage,
 } from "../types.ts";
 import { isToolCallContent } from "../types.ts";
 import {
@@ -66,7 +67,7 @@ export interface StageOutcome {
 export function createAgentSaga(runtime: AgentRuntime) {
 	return function* watchAgent(): Generator<any, void, any> {
 		let runningTask: any;
-		let lastTask: string | null = null;
+		let lastTask: UserMessage | null = null;
 
 		while (true) {
 			const action = (yield take([AGENT_SUBMIT, AGENT_INTERRUPT, AGENT_RETRY])) as AgentAction;
@@ -93,7 +94,7 @@ export function createAgentSaga(runtime: AgentRuntime) {
 
 			if (action.type !== AGENT_SUBMIT) continue;
 
-			lastTask = action.payload.message.content;
+			lastTask = action.payload.message;
 			if (runningTask) yield cancel(runningTask);
 			runningTask = yield fork(runPipeline, runtime, lastTask);
 		}
@@ -101,7 +102,10 @@ export function createAgentSaga(runtime: AgentRuntime) {
 }
 
 /** 依次执行流水线；含 reviewer 时启用自动返工回路。 */
-function* runPipeline(runtime: AgentRuntime, task: string): Generator<any, void, any> {
+function* runPipeline(runtime: AgentRuntime, task: UserMessage): Generator<any, void, any> {
+	// 图片只在第一个执行阶段注入，后续阶段基于上一步的文本产物工作。
+	const taskText = task.content;
+	const images = task.images;
 	try {
 		yield put(
 			pipelineStarted(
@@ -117,7 +121,15 @@ function* runPipeline(runtime: AgentRuntime, task: string): Generator<any, void,
 		if (executor === -1 || reviewer === -1) {
 			let previousOutput = "";
 			for (let index = 0; index < runtime.stages.length; index += 1) {
-				const outcome = (yield call(runStageFlow, runtime, index, task, previousOutput, 1)) as StageOutcome;
+				const outcome = (yield call(
+					runStageFlow,
+					runtime,
+					index,
+					taskText,
+					previousOutput,
+					1,
+					index === 0 ? images : undefined,
+				)) as StageOutcome;
 				if (outcome.error) {
 					yield put(agentError(outcome.error));
 					return;
@@ -129,7 +141,7 @@ function* runPipeline(runtime: AgentRuntime, task: string): Generator<any, void,
 
 		let plan = "";
 		if (planner !== -1) {
-			const planned = (yield call(runStageFlow, runtime, planner, task, "", 1)) as StageOutcome;
+			const planned = (yield call(runStageFlow, runtime, planner, taskText, "", 1, images)) as StageOutcome;
 			if (planned.error) {
 				yield put(agentError(planned.error));
 				return;
@@ -143,7 +155,7 @@ function* runPipeline(runtime: AgentRuntime, task: string): Generator<any, void,
 				runStageFlow,
 				runtime,
 				executor,
-				task,
+				taskText,
 				feedback.length > 0 ? feedback : plan,
 				attempt,
 			)) as StageOutcome;
@@ -157,7 +169,7 @@ function* runPipeline(runtime: AgentRuntime, task: string): Generator<any, void,
 				runStageFlow,
 				runtime,
 				reviewer,
-				task,
+				taskText,
 				implemented.output,
 				attempt,
 			)) as StageOutcome;
@@ -193,12 +205,18 @@ function* runStageFlow(
 	task: string,
 	previousOutput: string,
 	attempt: number,
+	images?: string[],
 ): Generator<any, StageOutcome, any> {
 	const stage = runtime.stages[index]!;
 	yield put(stageStarted({ index, role: stage.role, name: stage.name, attempt }));
 
 	const messages: Message[] = [
-		{ role: "user", content: buildStageInput(task, stage, previousOutput), timestamp: Date.now() },
+		{
+			role: "user",
+			content: buildStageInput(task, stage, previousOutput),
+			timestamp: Date.now(),
+			...(images && images.length > 0 ? { images } : {}),
+		},
 	];
 	const outcome = (yield call(runStage, runtime, stage, messages)) as StageOutcome;
 

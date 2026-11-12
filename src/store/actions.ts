@@ -25,10 +25,17 @@ export const STAGE_STARTED = "pipeline/stageStarted";
 export const STAGE_ENDED = "pipeline/stageEnded";
 export const STAGE_FAILED = "pipeline/stageFailed";
 
-export const agentSubmit = (input: string) =>
+export const agentSubmit = (input: string, images?: string[]) =>
 	({
 		type: AGENT_SUBMIT,
-		payload: { message: { role: "user", content: input, timestamp: Date.now() } satisfies UserMessage },
+		payload: {
+			message: {
+				role: "user",
+				content: input,
+				timestamp: Date.now(),
+				...(images && images.length > 0 ? { images } : {}),
+			} satisfies UserMessage,
+		},
 	}) as const;
 
 export const agentTurnStarted = () => ({ type: AGENT_TURN_STARTED }) as const;
