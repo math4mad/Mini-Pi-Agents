@@ -43,6 +43,11 @@ const graphqlUrl = process.env.GRAPHQL_URL ?? "http://127.0.0.1:4123/graphql";
 const tuiEnabled = argv.includes("--tui") && stdout.isTTY === true && workerId === null;
 const parsedDevtoolsPort = Number.parseInt(process.env.REDUX_DEVTOOLS_PORT ?? "", 10);
 const devtoolsPort = Number.isFinite(parsedDevtoolsPort) ? parsedDevtoolsPort : 8000;
+// Safari 没有可用的 DevTools 扩展：交互式终端默认开 redux-logger，TUI 与非 TTY 场景保持安静。
+const loggerEnabled =
+	process.env.REDUX_LOGGER === "1" ||
+	argv.includes("--logger") ||
+	(stdout.isTTY === true && !tuiEnabled && process.env.REDUX_LOGGER !== "0");
 
 if (workerFlagIndex >= 0 && !workerId) {
 	stdout.write("用法：--worker <machine-id>，例如 --worker mac-mini\n");
@@ -79,6 +84,7 @@ const saga = workerId
 
 const store = createAgentStore(runtime, {
 	enhancer: await loadDevtoolsEnhancer({ enabled: devtoolsEnabled, port: devtoolsPort }),
+	logger: loggerEnabled,
 	saga,
 });
 
@@ -202,7 +208,7 @@ async function shutdown(code: number): Promise<void> {
 
 const skipped = new Set<number>();
 argv.forEach((arg, index) => {
-	if (["--devtools", "--tui", "--single", "--remote", "--exit-on-idle"].includes(arg)) {
+	if (["--devtools", "--tui", "--single", "--remote", "--exit-on-idle", "--logger"].includes(arg)) {
 		skipped.add(index);
 		return;
 	}

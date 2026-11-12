@@ -19,6 +19,7 @@
 	"devDependencies": {
 		"@redux-devtools/cli": "^4.0.3",
 		"@types/node": "^24.10.1",
+		"@types/redux-logger": "^3.0.13",
 		"graphql-yoga": "^6.0.1",
 		"typescript": "^5.9.3"
 	},
@@ -28,6 +29,7 @@
 		"graphql": "^16.15.0",
 		"graphql-sse": "^2.6.3",
 		"redux": "^5.0.1",
+		"redux-logger": "^3.0.6",
 		"redux-saga": "^1.5.1"
 	},
 	"allowScripts": {
