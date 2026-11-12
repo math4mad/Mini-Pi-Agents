@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mini Pi Agents · 任务流转与信息通路</title>
+<style>
+	:root {
+		--ink: #171c22;
+		--sub: #5c6875;
+		--line: #cfd6dd;
+		--canvas: #f3f5f7;
+		--blue: #0b6bb5;
+		--green: #1e8e3e;
+		--orange: #c2410c;
+		--gray: #6b7785;
+	}
+	* { box-sizing: border-box; }
+	body {
+		margin: 0;
+		background: var(--canvas);
+		color: var(--ink);
+		font-family: -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+		-webkit-font-smoothing: antialiased;
+	}
+	.page { max-width: 1500px; margin: 0 auto; padding: 40px 36px 56px; }
+	.topbar {
+		display: flex; align-items: center; gap: 10px;
+		font-size: 11px; font-weight: 700; letter-spacing: .14em;
+		color: var(--blue); text-transform: uppercase; margin-bottom: 14px;
+	}
+	.topbar .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--blue); }
+	h1 { margin: 0 0 10px; font-size: 30px; line-height: 1.25; letter-spacing: -.01em; }
+	.lede { margin: 0 0 18px; font-size: 14px; line-height: 1.7; color: var(--sub); max-width: 980px; }
+	.meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 30px; }
+	.chip {
+		display: inline-flex; align-items: center; gap: 6px;
+		padding: 5px 10px; border-radius: 999px;
+		background: #fff; border: 1px solid #e1e6ea;
+		font-size: 11px; color: #4b5563;
+	}
+	.chip b { font-weight: 600; color: var(--ink); }
+	.figure {
+		background: #fff; border: 1px solid #e1e6ea; border-radius: 14px;
+		padding: 26px 26px 18px; margin-bottom: 28px;
+		box-shadow: 0 1px 2px rgba(16, 24, 40, .04), 0 8px 24px rgba(16, 24, 40, .05);
+	}
+	.fig-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 6px; }
+	.fig-head h2 { margin: 0; font-size: 17px; }
+	.fig-head .tag { font-size: 11px; color: var(--sub); white-space: nowrap; }
+	.fig-desc { margin: 0 0 14px; font-size: 12.5px; line-height: 1.7; color: var(--sub); }
+	svg { display: block; width: 100%; height: auto; }
+	.steps { margin: 16px 0 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 26px; }
+	.steps li { display: flex; gap: 8px; font-size: 12px; line-height: 1.6; color: #374151; }
+	.steps .n {
+		flex: 0 0 auto; width: 18px; height: 18px; border-radius: 50%;
+		display: grid; place-items: center; margin-top: 1px;
+		font-size: 10px; font-weight: 700; color: #fff; background: var(--blue);
+	}
+	.steps .n.g { background: var(--green); }
+	.steps .n.o { background: var(--orange); }
+	.legend { display: flex; flex-wrap: wrap; gap: 18px; padding: 14px 2px 0; border-top: 1px dashed #e1e6ea; margin-top: 18px; font-size: 11.5px; color: var(--sub); }
+	.legend span { display: inline-flex; align-items: center; gap: 7px; }
+	.legend i { display: inline-block; width: 26px; height: 0; border-top: 2px solid var(--gray); }
+	.legend i.dash { border-top-style: dashed; }
+	.legend i.blue { border-color: var(--blue); }
+	.legend i.green { border-color: var(--green); }
+	.legend i.orange { border-color: var(--orange); }
+	.footer { font-size: 11.5px; line-height: 1.8; color: #7b8794; }
+	.footer code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; background: #eef1f4; padding: 1px 5px; border-radius: 4px; }
+	/* SVG 通用样式 */
+	.bx { fill: #fff; stroke: var(--line); stroke-width: 1; }
+	.t { font-size: 13px; font-weight: 600; fill: var(--ink); }
+	.s { font-size: 10.5px; fill: var(--sub); }
+	.gl { font-size: 11px; font-weight: 700; letter-spacing: .09em; fill: #4b5563; }
+	.note { font-size: 10.5px; fill: #7b8794; }
+	.lbl { font-size: 10px; fill: #4b5563; }
+	.stepnum { font-size: 10px; font-weight: 700; fill: #fff; text-anchor: middle; }
+	@media print {
+		body { background: #fff; }
+		.page { padding: 0; max-width: none; }
+		.figure { break-inside: avoid; box-shadow: none; border-color: #d5dbe1; }
+	}
+</style>
+</head>
+<body>
+<div class="page">
+	<div class="topbar"><span class="dot"></span>Mini Pi Agents · Architecture</div>
+	<h1>任务流转与信息通路</h1>
+	<p class="lede">
+		上图为业务视角：一张手写表格如何穿过采集端、多 Agent 协同与验收审计；
+		下图为系统视角：命令如何从 CLI 进入 Redux/Saga，经 GraphQL 落到 worker，再把事件回灌成 action。
+		两图共用同一套编号语义——蓝色为同步调用，橙色为写入/变更，绿色为异步事件回传。
+	</p>
+	<div class="meta">
+		<span class="chip">分支 <b>feature/sandbox</b></span>
+		<span class="chip">提交 <b>cc150bf</b></span>
+		<span class="chip">沙箱 <b>mini-pi-sandbox:node</b></span>
+		<span class="chip">日期 <b>2026-11-12</b></span>
+	</div>
+
+	<!-- ==================== 图 1 ==================== -->
+	<section class="figure">
+		<div class="fig-head">
+			<h2>图 1 · 任务在多 Agent 系统中的流转</h2>
+			<span class="tag">端到端 · 采集 → 协同 → 交付</span>
+		</div>
+		<p class="fig-desc">
+			三条泳道对应三个边界：m1 采集端、GraphQL 控制面 + worker 执行面、交付与审计。
+			阶段之间只传“上一阶段的最后一条消息”，不共享上下文；Executor 是唯一可写角色。
+		</p>
+
+		<svg viewBox="0 0 1440 940" role="img" aria-label="任务在多 Agent 系统中的流转图">
+			<defs>
+				<marker id="ar1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+					<path d="M0,0 L10,5 L0,10 z" fill="#7b8794"></path>
+				</marker>
+				<marker id="ar1g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+					<path d="M0,0 L10,5 L0,10 z" fill="#1e8e3e"></path>
+				</marker>
+				<marker id="ar1o" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+					<path d="M0,0 L10,5 L0,10 z" fill="#c2410c"></path>
+				</marker>
+			</defs>
+
+			<!-- 泳道 1 -->
+			<rect class="grp" x="30" y="48" width="1380" height="280" rx="12" fill="#fafbfc" stroke="#c6ced6" stroke-dasharray="7 5"></rect>
+			<text class="gl" x="48" y="72">① 采集与识别 · m1</text>
+
+			<g>
+				<rect class="bx" x="60" y="118" width="170" height="78" rx="8"></rect>
+				<text class="t" x="76" y="154">手写表格照片</text>
+				<text class="s" x="76" y="176">sports-log / 检验表</text>
+			</g>
+			<g>
+				<rect class="bx" x="255" y="118" width="170" height="78" rx="8"></rect>
+				<text class="t" x="271" y="154">inbox/*.png</text>
+				<text class="s" x="271" y="176">m1 本地目录</text>
+			</g>
+			<g>
+				<rect class="bx" x="450" y="118" width="170" height="78" rx="8"></rect>
+				<text class="t" x="466" y="154">collect.sh</text>
+				<text class="s" x="466" y="176">采集入口 · 逐张识别</text>
+			</g>
+			<g>
+				<rect class="bx" x="645" y="118" width="170" height="78" rx="8"></rect>
+				<text class="t" x="661" y="154">Agent --single</text>
+				<text class="s" x="661" y="176">多模态视觉模型</text>
+			</g>
+			<g>
+				<rect class="bx" x="840" y="118" width="170" height="78" rx="8" stroke="#0b6bb5"></rect>
+				<text class="t" x="856" y="154">沙箱容器</text>
+				<text class="s" x="856" y="176">mini-pi-sandbox:node</text>
+			</g>
+			<g>
+				<rect class="bx" x="1035" y="118" width="170" height="78" rx="8"></rect>
+				<text class="t" x="1051" y="154">data/*.csv</text>
+				<text class="s" x="1051" y="176">结构化识别结果</text>
+			</g>
+			<g>
+				<rect class="bx" x="1230" y="118" width="170" height="78" rx="8"></rect>
+				<text class="t" x="1246" y="154">git push</text>
+				<text class="s" x="1246" y="176">远端仓库 + Issue</text>
+			</g>
+
+			<!-- 泳道 1 箭头 -->
+			<line x1="232" y1="157" x2="251" y2="157" stroke="#7b8794" stroke-width="1.4" marker-end="url(#ar1)"></line>
+			<line x1="427" y1="157" x2="446" y2="157" stroke="#7b8794" stroke-width="1.4" marker-end="url(#ar1)"></line>
+			<line x1="622" y1="157" x2="641" y2="157" stroke="#7b8794" stroke-width="1.4" marker-end="url(#ar1)"></line>
+			<line x1="817" y1="157" x2="836" y2="157" stroke="#7b8794" stroke-width="1.4" marker-end="url(#ar1)"></line>
+			<line x1="1012" y1="157" x2="1031" y2="157" stroke="#7b8794" stroke-width="1.4" marker-end="url(#ar1)"></line>
+			<line x1="1207" y1="157" x2="1226" y2="157" stroke="#7b8794" stroke-width="1.4" marker-end="url(#ar1)"></line>
+
+			<circle cx="241" cy="137" r="9" fill="#0b6bb5"></circle><text class="stepnum" x="241" y="140.5">1</text>
+			<circle cx="436" cy="137" r="9" fill="#0b6bb5"></circle><text class="stepnum" x="436" y="140.5">2</text>
+			<circle cx="631" cy="137" r="9" fill="#0b6bb5"></circle><text class="stepnum" x="631" y="140.5">3</text>
+			<circle cx="826" cy="137" r="9" fill="#0b6bb5"></circle><text class="stepnum" x="826" y="140.5">4</text>
+			<circle cx="1021" cy="137" r="9" fill="#0b6bb5"></circle><text class="stepnum" x="1021" y="140.5">5</text>
+			<circle cx="1216" cy="137" r="9" fill="#0b6bb5"></circle><text class="stepnum" x="1216" y="140.5">6</text>
+
+			<text class="note" x="60" y="238">识别阶段的工具调用全部经 Sandbox 转发：write_file / run_command 在容器内执行，只有任务目录挂到 /workspace。</text>
+			<text class="note" x="60" y="260">容器默认无网络、只读根文件系统、pids / 内存 / CPU 限额；越界路径与符号链接逃逸在工具层直接拒绝。</text>
+			<text class="note" x="60" y="282">失败即报错，不静默降级：镜像缺失或模型空响应都必须显式重试（免费模型偶发限流）。</text>
+
+			<!-- 泳道 2 -->
+			<rect class="grp" x="30" y="352" width="1380" height="308" rx="12" fill="#fafbfc" stroke="#c6ced6" stroke-dasharray="7 5"></rect>
+			<text class="gl" x="48" y="376">② 多 Agent 协同 · GraphQL 控制面 + 租约</text>
+
+			<g>
+				<rect class="bx" x="60" y="410" width="190" height="88" rx="8"></rect>
+				<text class="t" x="76" y="446">协调者 --remote</text>
+				<text class="s" x="76" y="468">createTask + 订阅事件</text>
+				<text class="s" x="76" y="486">只观测，不执行</text>
+			</g>
+			<g>
+				<rect class="bx" x="330" y="410" width="180" height="88" rx="8"></rect>
+				<text class="t" x="346" y="446">Planner</text>
+				<text class="s" x="346" y="468">只读 · 拆解任务</text>
+				<text class="s" x="346" y="486">无 write_file</text>
+			</g>
+			<g>
+				<rect class="bx" x="590" y="410" width="180" height="88" rx="8" stroke="#c2410c"></rect>
+				<text class="t" x="606" y="446">Executor</text>
+				<text class="s" x="606" y="468">唯一可写 · 工具执行</text>
+				<text class="s" x="606" y="486">沙箱内运行</text>
+			</g>
+			<g>
+				<rect class="bx" x="850" y="410" width="180" height="88" rx="8"></rect>
+				<text class="t" x="866" y="446">Reviewer</text>
+				<text class="s" x="866" y="468">只读 · 验收产物</text>
+				<text class="s" x="866" y="486">APPROVED 判定</text>
+			</g>
+			<g>
+				<rect class="bx" x="1110" y="410" width="210" height="88" rx="8"></rect>
+				<text class="t" x="1126" y="446">task.done / failed</text>
+				<text class="s" x="1126" y="468">汇总 stage.finished</text>
+				<text class="s" x="1126" y="486">触发交付与通知</text>
+			</g>
+
+			<line x1="252" y1="454" x2="326" y2="454" stroke="#7b8794" stroke-width="1.4" marker-end="url(#ar1)"></line>
+			<line x1="512" y1="454" x2="586" y2="454" stroke="#7b8794" stroke-width="1.4" marker-end="url(#ar1)"></line>
+			<line x1="772" y1="454" x2="846" y2="454" stroke="#7b8794" stroke-width="1.4" marker-end="url(#ar1)"></line>
+			<line x1="1032" y1="454" x2="1106" y2="454" stroke="#7b8794" stroke-width="1.4" marker-end="url(#ar1)"></line>
+
+			<circle cx="289" cy="434" r="9" fill="#0b6bb5"></circle><text class="stepnum" x="289" y="437.5">7</text>
+			<circle cx="549" cy="434" r="9" fill="#0b6bb5"></circle><text class="stepnum" x="549" y="437.5">8</text>
+			<circle cx="809" cy="434" r="9" fill="#0b6bb5"></circle><text class="stepnum" x="809" y="437.5">9</text>
+			<circle cx="1069" cy="434" r="9" fill="#0b6bb5"></circle><text class="stepnum" x="1069" y="437.5">10</text>
+
+			<!-- 返工回路 -->
+			<path d="M940 410 V388 H680 V406" fill="none" stroke="#c2410c" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ar1o)"></path>
+			<text class="lbl" x="700" y="382" fill="#c2410c">reject → 返工：attempt + 1（上限 2，超限转人工）</text>
+
+			<!-- 控制面 -->
+			<rect class="bx" x="60" y="536" width="1260" height="70" rx="8" fill="#f2f7fb" stroke="#9cc3e0"></rect>
+			<text class="t" x="80" y="562">GraphQL 服务 · 任务与阶段的唯一状态机</text>
+			<rect x="80" y="572" width="168" height="20" rx="10" fill="#fff" stroke="#c6d8e6"></rect>
+			<text class="lbl" x="92" y="586">租约 claim（默认 10 min）</text>
+			<rect x="264" y="572" width="150" height="20" rx="10" fill="#fff" stroke="#c6d8e6"></rect>
+			<text class="lbl" x="276" y="586">version CAS 提交</text>
+			<rect x="430" y="572" width="168" height="20" rx="10" fill="#fff" stroke="#c6d8e6"></rect>
+			<text class="lbl" x="442" y="586">clientEventId 幂等</text>
+			<rect x="614" y="572" width="176" height="20" rx="10" fill="#fff" stroke="#c6d8e6"></rect>
+			<text class="lbl" x="626" y="586">事件流 seq · 断线重放</text>
+			<text class="note" x="830" y="586">掉线后同能力节点可接管过期租约；版本冲突的提交被拒绝，由 Saga 重新查询后再提交。</text>
+
+			<!-- 泳道 3 -->
+			<rect class="grp" x="30" y="690" width="1380" height="228" rx="12" fill="#fafbfc" stroke="#c6ced6" stroke-dasharray="7 5"></rect>
+			<text class="gl" x="48" y="714">③ 交付与分析 · 产物闭环</text>
+
+			<g>
+				<rect class="bx" x="80" y="748" width="200" height="80" rx="8"></rect>
+				<text class="t" x="96" y="782">远端 Git 仓库</text>
+				<text class="s" x="96" y="804">data/*.csv 提交</text>
+			</g>
+			<g>
+				<rect class="bx" x="320" y="748" width="200" height="80" rx="8"></rect>
+				<text class="t" x="336" y="782">交接 Issue #1</text>
+				<text class="s" x="336" y="804">验收标准 + 待办</text>
+			</g>
+			<g>
+				<rect class="bx" x="560" y="748" width="200" height="80" rx="8"></rect>
+				<text class="t" x="576" y="782">数据分析 Agent</text>
+				<text class="s" x="576" y="804">summary.md · charts</text>
+			</g>
+			<g>
+				<rect class="bx" x="800" y="748" width="200" height="80" rx="8"></rect>
+				<text class="t" x="816" y="782">独立复算审计</text>
+				<text class="s" x="816" y="804">pandas 复算 · 比对</text>
+			</g>
+			<g>
+				<rect class="bx" x="1040" y="748" width="220" height="80" rx="8" stroke="#1e8e3e"></rect>
+				<text class="t" x="1056" y="782">验收结论</text>
+				<text class="s" x="1056" y="804">通过 / 返工 → 通知</text>
+			</g>
+
+			<line x1="282" y1="788" x2="316" y2="788" stroke="#7b8794" stroke-width="1.4" marker-end="url(#ar1)"></line>
+			<line x1="522" y1="788" x2="556" y2="788" stroke="#7b8794" stroke-width="1.4" marker-end="url(#ar1)"></line>
+			<line x1="762" y1="788" x2="796" y2="788" stroke="#7b8794" stroke-width="1.4" marker-end="url(#ar1)"></line>
+			<line x1="1002" y1="788" x2="1036" y2="788" stroke="#7b8794" stroke-width="1.4" marker-end="url(#ar1)"></line>
+
+			<circle cx="299" cy="768" r="9" fill="#0b6bb5"></circle><text class="stepnum" x="299" y="771.5">11</text>
+			<circle cx="539" cy="768" r="9" fill="#0b6bb5"></circle><text class="stepnum" x="539" y="771.5">12</text>
+			<circle cx="779" cy="768" r="9" fill="#0b6bb5"></circle><text class="stepnum" x="779" y="771.5">13</text>
+			<circle cx="1019" cy="768" r="9" fill="#0b6bb5"></circle><text class="stepnum" x="1019" y="771.5">14</text>
+
+			<text class="note" x="80" y="866">审计不读 Agent 自述，而是独立复算统计量、在临时副本重跑脚本并逐字节比对产物；</text>
+			<text class="note" x="80" y="888">本次实战验证了“自检 ≠ 验收”：模型自查只核对行数，未能发现「无 → 元」的识别错误。</text>
+
+			<!-- 泳道间连接 -->
+			<line x1="915" y1="328" x2="915" y2="348" stroke="#7b8794" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#ar1)"></line>
+			<text class="note" x="925" y="344">远端派单（--remote / --worker）</text>
+			<line x1="700" y1="660" x2="700" y2="686" stroke="#7b8794" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#ar1)"></line>
+			<text class="note" x="710" y="680">产物交接</text>
+		</svg>
+
+		<ol class="steps">
+			<li><span class="n">1</span><span>手写表拍照后落入 m1 的 <code>inbox/</code>，原图不裁剪、不压缩。</span></li>
+			<li><span class="n">2</span><span><code>collect.sh</code> 逐张调用 Agent（<code>--single</code>），跳过已存在产物。</span></li>
+			<li><span class="n">3</span><span>图片以 data URL 进入多模态消息，首个阶段直接可见原图。</span></li>
+			<li><span class="n">4</span><span>工具调用转发进容器，产物写入 <code>data/&lt;同名&gt;.csv</code>。</span></li>
+			<li><span class="n">5</span><span>CSV 落盘后校验非空，空响应或空文件按失败退出，需人工重跑。</span></li>
+			<li><span class="n">6</span><span>提交并推送远端，同时创建交接 Issue 供分析端领取。</span></li>
+			<li><span class="n">7</span><span>协调者先记 <code>lastSeq</code> 再 <code>createTask</code>，订阅时从该序号补齐，避免漏事件。</span></li>
+			<li><span class="n">8</span><span>worker 轮询到待办阶段后 <code>claimStage</code> 拿租约；他人持锁则跳过，掉线自动过期。</span></li>
+			<li><span class="n">9</span><span>阶段只接收“任务 + 上一阶段输出”，工具集按角色收敛（仅 Executor 可写）。</span></li>
+			<li><span class="n">10</span><span>Reviewer 不通过则回到 Executor，<code>attempt</code> 累加，超限转人工。</span></li>
+			<li><span class="n">11</span><span>通过后产物提交进远端仓库，按任务目录归档。</span></li>
+			<li><span class="n">12</span><span>交接 Issue 固化验收标准：列名、行数、统计口径都必须可复核。</span></li>
+			<li><span class="n">13</span><span>分析 Agent 消费 CSV，产出 <code>summary.md</code> 与 <code>charts/*.png</code>。</span></li>
+			<li><span class="n">14</span><span>独立审计复算并比对产物，结论只写“通过 / 返工”，不采信 Agent 自述。</span></li>
+		</ol>
+
+		<div class="legend">
+			<span><i class="blue"></i>同步调用（阶段推进 / 派单）</span>
+			<span><i class="orange dash"></i>返工回路（reject → 重试）</span>
+			<span><i class="dash"></i>泳道间交接</span>
+			<span>绿色框 = 终态与结论</span>
+		</div>
+	</section>
+
+	<!-- ==================== 图 2 ==================== -->
+	<section class="figure">
+		<div class="fig-head">
+			<h2>图 2 · 信息在 GraphQL ↔ Redux 中的传递路线</h2>
+			<span class="tag">命令下行 · 事件上行 · worker 闭环</span>
+		</div>
+		<p class="fig-desc">
+			三条数据通路：蓝色是命令下行（dispatch → mutation），绿色是事件回传（subscription → action → state），
+			橙色是 worker 的执行闭环。任何跨机信息都先变成 action 再进 store，UI 只订阅 state。
+		</p>
+
+		<svg viewBox="0 0 1440 940" role="img" aria-label="GraphQL 与 Redux 信息传递路线图">
+			<defs>
+				<marker id="ar2b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+					<path d="M0,0 L10,5 L0,10 z" fill="#0b6bb5"></path>
+				</marker>
+				<marker id="ar2g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+					<path d="M0,0 L10,5 L0,10 z" fill="#1e8e3e"></path>
+				</marker>
+				<marker id="ar2o" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+					<path d="M0,0 L10,5 L0,10 z" fill="#c2410c"></path>
+				</marker>
+			</defs>
+
+			<!-- 通路 1 -->
+			<rect class="grp" x="30" y="48" width="1380" height="300" rx="12" fill="#fafbfc" stroke="#c6ced6" stroke-dasharray="7 5"></rect>
+			<text class="gl" x="48" y="72">① 命令下行 · dispatch → GraphQL mutation</text>
+
+			<g>
+				<rect class="bx" x="60" y="118" width="180" height="86" rx="8"></rect>
+				<text class="t" x="76" y="154">CLI / TUI</text>
+				<text class="s" x="76" y="176">agentSubmit(prompt)</text>
+			</g>
+			<g>
+				<rect class="bx" x="300" y="118" width="180" height="86" rx="8"></rect>
+				<text class="t" x="316" y="154">Redux Store</text>
+				<text class="s" x="316" y="176">reducer · 唯一状态源</text>
+			</g>
+			<g>
+				<rect class="bx" x="540" y="118" width="180" height="86" rx="8"></rect>
+				<text class="t" x="556" y="154">Saga</text>
+				<text class="s" x="556" y="176">remote / worker / agent</text>
+			</g>
+			<g>
+				<rect class="bx" x="780" y="118" width="180" height="86" rx="8"></rect>
+				<text class="t" x="796" y="154">RemoteClient</text>
+				<text class="s" x="796" y="176">fetch + graphql-sse</text>
+			</g>
+			<g>
+				<rect class="bx" x="1020" y="118" width="180" height="86" rx="8" stroke="#0b6bb5"></rect>
+				<text class="t" x="1036" y="154">GraphQL Server</text>
+				<text class="s" x="1036" y="176">yoga · tasks / stages</text>
+			</g>
+			<g>
+				<rect class="bx" x="1250" y="118" width="150" height="86" rx="8"></rect>
+				<text class="t" x="1266" y="154">服务端状态</text>
+				<text class="s" x="1266" y="176">tasks · stages</text>
+				<text class="s" x="1266" y="194">events · seq</text>
+			</g>
+
+			<line x1="242" y1="161" x2="296" y2="161" stroke="#0b6bb5" stroke-width="1.5" marker-end="url(#ar2b)"></line>
+			<line x1="482" y1="161" x2="536" y2="161" stroke="#0b6bb5" stroke-width="1.5" marker-end="url(#ar2b)"></line>
+			<line x1="722" y1="161" x2="776" y2="161" stroke="#0b6bb5" stroke-width="1.5" marker-end="url(#ar2b)"></line>
+			<line x1="962" y1="161" x2="1016" y2="161" stroke="#0b6bb5" stroke-width="1.5" marker-end="url(#ar2b)"></line>
+			<line x1="1202" y1="161" x2="1246" y2="161" stroke="#0b6bb5" stroke-width="1.5" marker-end="url(#ar2b)"></line>
+
+			<circle cx="269" cy="141" r="9" fill="#0b6bb5"></circle><text class="stepnum" x="269" y="144.5">1</text>
+			<circle cx="509" cy="141" r="9" fill="#0b6bb5"></circle><text class="stepnum" x="509" y="144.5">2</text>
+			<circle cx="749" cy="141" r="9" fill="#0b6bb5"></circle><text class="stepnum" x="749" y="144.5">3</text>
+			<circle cx="989" cy="141" r="9" fill="#0b6bb5"></circle><text class="stepnum" x="989" y="144.5">4</text>
+			<circle cx="1224" cy="141" r="9" fill="#0b6bb5"></circle><text class="stepnum" x="1224" y="144.5">5</text>
+
+			<text class="note" x="60" y="246">Saga 只 yield call / put，不直接改 state；跨机事件必须先映射成 action 再进 store，渲染层完全不知道网络存在。</text>
+			<text class="note" x="60" y="268">createTask 携带 clientEventId 保证幂等重放；创建前先取 lastSeq，订阅时以该序号补齐历史事件。</text>
+			<text class="note" x="60" y="290">协调者的中断只取消本地订阅，远端任务继续执行——状态归属服务端，客户端只是观察者。</text>
+
+			<!-- 通路 2 -->
+			<rect class="grp" x="30" y="378" width="1380" height="290" rx="12" fill="#fafbfc" stroke="#c6ced6" stroke-dasharray="7 5"></rect>
+			<text class="gl" x="48" y="402">② 事件回传 · subscription → action → 渲染</text>
+
+			<g>
+				<rect class="bx" x="1230" y="452" width="150" height="86" rx="8" stroke="#1e8e3e"></rect>
+				<text class="t" x="1246" y="488">Subscription</text>
+				<text class="s" x="1246" y="510">events(since)</text>
+			</g>
+			<g>
+				<rect class="bx" x="990" y="452" width="190" height="86" rx="8"></rect>
+				<text class="t" x="1006" y="488">eventChannel</text>
+				<text class="s" x="1006" y="510">buffers.expanding()</text>
+			</g>
+			<g>
+				<rect class="bx" x="750" y="452" width="180" height="86" rx="8"></rect>
+				<text class="t" x="766" y="488">put(action)</text>
+				<text class="s" x="766" y="510">stageStarted 等</text>
+			</g>
+			<g>
+				<rect class="bx" x="510" y="452" width="180" height="86" rx="8"></rect>
+				<text class="t" x="526" y="488">reducer</text>
+				<text class="s" x="526" y="510">更新 stages / 消息</text>
+			</g>
+			<g>
+				<rect class="bx" x="270" y="452" width="180" height="86" rx="8"></rect>
+				<text class="t" x="286" y="488">Renderer / TUI</text>
+				<text class="s" x="286" y="510">订阅 state 渲染</text>
+			</g>
+			<g>
+				<rect class="bx" x="60" y="452" width="150" height="86" rx="8"></rect>
+				<text class="t" x="76" y="488">用户可见输出</text>
+				<text class="s" x="76" y="510">阶段产物 · 错误</text>
+			</g>
+
+			<line x1="1228" y1="495" x2="1186" y2="495" stroke="#1e8e3e" stroke-width="1.5" marker-end="url(#ar2g)"></line>
+			<line x1="988" y1="495" x2="936" y2="495" stroke="#1e8e3e" stroke-width="1.5" marker-end="url(#ar2g)"></line>
+			<line x1="748" y1="495" x2="696" y2="495" stroke="#1e8e3e" stroke-width="1.5" marker-end="url(#ar2g)"></line>
+			<line x1="508" y1="495" x2="456" y2="495" stroke="#1e8e3e" stroke-width="1.5" marker-end="url(#ar2g)"></line>
+			<line x1="268" y1="495" x2="216" y2="495" stroke="#1e8e3e" stroke-width="1.5" marker-end="url(#ar2g)"></line>
+
+			<circle cx="1207" cy="475" r="9" fill="#1e8e3e"></circle><text class="stepnum" x="1207" y="478.5">6</text>
+			<circle cx="962" cy="475" r="9" fill="#1e8e3e"></circle><text class="stepnum" x="962" y="478.5">7</text>
+			<circle cx="722" cy="475" r="9" fill="#1e8e3e"></circle><text class="stepnum" x="722" y="478.5">8</text>
+			<circle cx="482" cy="475" r="9" fill="#1e8e3e"></circle><text class="stepnum" x="482" y="478.5">9</text>
+			<circle cx="242" cy="475" r="9" fill="#1e8e3e"></circle><text class="stepnum" x="242" y="478.5">10</text>
+
+			<path d="M1110 206 V236 H1305 V448" fill="none" stroke="#1e8e3e" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#ar2g)"></path>
+			<text class="note" x="1120" y="256">SSE 长连接（graphql-sse）</text>
+
+			<text class="note" x="60" y="580">seq 断线补齐：订阅参数 since = 断线前最后事件号；固定容量缓冲会把刚建立订阅时的回放事件挤掉，必须用 expanding。</text>
+			<text class="note" x="60" y="602">事件按 taskId 过滤，其他任务的事件直接忽略，保证一个协调者只关心自己的任务。</text>
+			<text class="note" x="60" y="624">stage.finished 到达后回查 stage 详情，区分 done / error，再分别映射为 stageEnded 或 stageFailed。</text>
+
+			<!-- 通路 3 -->
+			<rect class="grp" x="30" y="698" width="1380" height="212" rx="12" fill="#fafbfc" stroke="#c6ced6" stroke-dasharray="7 5"></rect>
+			<text class="gl" x="48" y="722">③ 工作节点 · 轮询 → 租约 → CAS 提交</text>
+
+			<g>
+				<rect class="bx" x="60" y="762" width="200" height="76" rx="8"></rect>
+				<text class="t" x="76" y="794">Worker Saga</text>
+				<text class="s" x="76" y="816">轮询 tasks()</text>
+			</g>
+			<g>
+				<rect class="bx" x="320" y="762" width="200" height="76" rx="8" stroke="#c2410c"></rect>
+				<text class="t" x="336" y="794">claimStage</text>
+				<text class="s" x="336" y="816">租约 10 min</text>
+			</g>
+			<g>
+				<rect class="bx" x="580" y="762" width="200" height="76" rx="8" stroke="#c2410c"></rect>
+				<text class="t" x="596" y="794">runStage</text>
+				<text class="s" x="596" y="816">模型 + 沙箱工具</text>
+			</g>
+			<g>
+				<rect class="bx" x="840" y="762" width="200" height="76" rx="8"></rect>
+				<text class="t" x="856" y="794">finishStage</text>
+				<text class="s" x="856" y="816">version CAS · done/error</text>
+			</g>
+			<g>
+				<rect class="bx" x="1100" y="762" width="220" height="76" rx="8" stroke="#1e8e3e"></rect>
+				<text class="t" x="1116" y="794">事件流追加</text>
+				<text class="s" x="1116" y="816">seq++ → 广播订阅者</text>
+			</g>
+
+			<line x1="262" y1="800" x2="316" y2="800" stroke="#c2410c" stroke-width="1.5" marker-end="url(#ar2o)"></line>
+			<line x1="522" y1="800" x2="576" y2="800" stroke="#c2410c" stroke-width="1.5" marker-end="url(#ar2o)"></line>
+			<line x1="782" y1="800" x2="836" y2="800" stroke="#c2410c" stroke-width="1.5" marker-end="url(#ar2o)"></line>
+			<line x1="1042" y1="800" x2="1096" y2="800" stroke="#1e8e3e" stroke-width="1.5" marker-end="url(#ar2g)"></line>
+
+			<circle cx="289" cy="780" r="9" fill="#c2410c"></circle><text class="stepnum" x="289" y="783.5">11</text>
+			<circle cx="549" cy="780" r="9" fill="#c2410c"></circle><text class="stepnum" x="549" y="783.5">12</text>
+			<circle cx="809" cy="780" r="9" fill="#c2410c"></circle><text class="stepnum" x="809" y="783.5">13</text>
+			<circle cx="1069" cy="780" r="9" fill="#1e8e3e"></circle><text class="stepnum" x="1069" y="783.5">14</text>
+
+			<text class="note" x="60" y="876">租约到期后同能力节点可接管；版本冲突（他人已提交）会拒绝本次写入，由 Saga 重新查询阶段再决策。</text>
+		</svg>
+
+		<ol class="steps">
+			<li><span class="n">1</span><span>用户输入变成 <code>agent/submit</code>，先过 reducer 保证状态机合法。</span></li>
+			<li><span class="n">2</span><span>Saga 用 <code>take</code> 接住 action，决定本地执行还是远端模式。</span></li>
+			<li><span class="n">3</span><span>远端模式下 <code>call</code> RemoteClient，工具调用与网络细节都留在 Saga。</span></li>
+			<li><span class="n">4</span><span><code>createTask / claimStage / finishStage</code> 走 mutation，查询走 query。</span></li>
+			<li><span class="n">5</span><span>服务端把任务、阶段、租约、事件序号收敛为唯一状态。</span></li>
+			<li><span class="n g">6</span><span>订阅 <code>events(since)</code> 拿到增量事件流，socket 断开可自动重连补齐。</span></li>
+			<li><span class="n g">7</span><span><code>eventChannel</code> 用 expanding 缓冲，避免回放事件被固定容量丢弃。</span></li>
+			<li><span class="n g">8</span><span>每条事件映射成既有 action（stageStarted / stageEnded / agentError…）。</span></li>
+			<li><span class="n g">9</span><span>reducer 更新 <code>state.stages</code> 与消息数组，不产生副作用。</span></li>
+			<li><span class="n g">10</span><span>渲染层只订阅 state，TUI 与行式渲染器行为一致。</span></li>
+			<li><span class="n o">11</span><span>worker 轮询任务列表，挑出第一个未完成且未出错的阶段。</span></li>
+			<li><span class="n o">12</span><span><code>claimStage</code> 带 machineId 与租约时长；抢不到说明前序未完成或他人持锁。</span></li>
+			<li><span class="n o">13</span><span>本机跑真实模型与工具，文件读写进沙箱容器，产物路径必须在任务目录内。</span></li>
+			<li><span class="n g">14</span><span><code>finishStage</code> 带 version 做 CAS，成功后追加事件并广播给所有订阅者。</span></li>
+		</ol>
+
+		<div class="legend">
+			<span><i class="blue"></i>命令下行（dispatch / mutation）</span>
+			<span><i class="green"></i>事件上行（subscription → action）</span>
+			<span><i class="orange"></i>worker 执行闭环（租约 / 工具）</span>
+			<span><i class="dash"></i>SSE 长连接</span>
+		</div>
+	</section>
+
+	<p class="footer">
+		说明：图 1 的返工回路与阶段验收按当前实现绘制（Reviewer 输出判定，attempt 上限 2）；
+		P2 的 evidence / accept-reject 门禁、P3 的入料校验仍属规划态，尚未进入主链路。
+		图 2 中 <code>lastSeq</code>、<code>expanding()</code>、<code>version CAS</code> 均为现有实现，
+		对应 <code>src/store/remote.ts</code>、<code>src/remote/graphql.ts</code>、<code>poc/server.ts</code>。
+	</p>
+</div>
+</body>
+</html>

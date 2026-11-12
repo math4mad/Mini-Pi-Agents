@@ -1,7 +1,12 @@
 # P0 执行沙箱：方案设计
 
 > 设计稿，已在 `feature/sandbox` 分支实现（最小可用版）。
-> 构建镜像：`docker build -f docker/sandbox-node.Dockerfile -t mini-pi-sandbox:node .`
+> 构建镜像（按能力拆，均以 uid 1000 非 root 运行）：
+> - `docker build -f docker/sandbox-node.Dockerfile -t mini-pi-sandbox:node .`（Node + bash + git）
+> - `docker build -f docker/sandbox-data.Dockerfile -t mini-pi-sandbox:data .`（Python + pandas + matplotlib）
+> - `docker build -f docker/sandbox-r.Dockerfile -t mini-pi-sandbox:r .`（R 4.4）
+> - `docker build -f docker/sandbox-julia.Dockerfile -t mini-pi-sandbox:julia .`（Julia 1.10）
+> 国内构建可用 `--build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`。
 > 默认 `SANDBOX_MODE=docker`；开发调试可设 `SANDBOX_MODE=host`。
 
 ## 1. 问题

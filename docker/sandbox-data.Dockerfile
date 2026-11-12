@@ -3,7 +3,10 @@
 
 FROM python:3.12-slim
 
-RUN pip install --no-cache-dir pandas matplotlib
+# 国内环境可传 --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG PIP_INDEX_URL=https://pypi.org/simple
+
+RUN pip install --no-cache-dir --index-url "$PIP_INDEX_URL" pandas matplotlib
 
 RUN useradd -m -u 1000 sandbox
 USER sandbox
