@@ -16,6 +16,11 @@ export const AGENT_ABORTED = "agent/aborted";
 /** 手动重试：重跑上一次提交的完整任务。 */
 export const AGENT_RETRY = "agent/retry";
 
+/** Session 生命周期：pi Session 是会话事实源，Redux 只保存投影结果。 */
+export const SESSION_OPENED = "session/opened";
+export const SESSION_RESTORED = "session/restored";
+export const SESSION_DISPOSED = "session/disposed";
+
 /** 工作节点启动：开始从远端协调者领取阶段。 */
 export const WORKER_START = "worker/start";
 
@@ -70,6 +75,13 @@ export const agentAborted = () => ({ type: AGENT_ABORTED }) as const;
 
 export const agentRetry = () => ({ type: AGENT_RETRY }) as const;
 
+export const sessionOpened = (payload: { taskId: string; sessionId: string; sessionFile?: string }) =>
+	({ type: SESSION_OPENED, payload }) as const;
+
+export const sessionRestored = (messages: Message[]) => ({ type: SESSION_RESTORED, payload: { messages } }) as const;
+
+export const sessionDisposed = (taskId: string) => ({ type: SESSION_DISPOSED, payload: { taskId } }) as const;
+
 export const workerStart = () => ({ type: WORKER_START }) as const;
 
 export const pipelineStarted = (stages: StageDescriptor[]) => ({ type: PIPELINE_STARTED, payload: { stages } }) as const;
@@ -96,6 +108,9 @@ export type AgentAction =
 	| ReturnType<typeof agentInterrupt>
 	| ReturnType<typeof agentAborted>
 	| ReturnType<typeof agentRetry>
+	| ReturnType<typeof sessionOpened>
+	| ReturnType<typeof sessionRestored>
+	| ReturnType<typeof sessionDisposed>
 	| ReturnType<typeof workerStart>
 	| ReturnType<typeof pipelineStarted>
 	| ReturnType<typeof stageStarted>

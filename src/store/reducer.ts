@@ -13,6 +13,9 @@ import {
 	AGENT_TURN_ENDED,
 	AGENT_TURN_STARTED,
 	PIPELINE_STARTED,
+	SESSION_DISPOSED,
+	SESSION_OPENED,
+	SESSION_RESTORED,
 	STAGE_ENDED,
 	STAGE_FAILED,
 	STAGE_STARTED,
@@ -49,6 +52,13 @@ export interface ToolActivity {
 	durationMs?: number;
 }
 
+/** 当前绑定的 pi Session；任务是编排层概念，一个任务对应一个 Session。 */
+export interface SessionState {
+	taskId: string | null;
+	sessionId: string | null;
+	sessionFile: string | null;
+}
+
 export interface AgentState {
 	status: AgentStatus;
 	messages: Message[];
@@ -61,6 +71,7 @@ export interface AgentState {
 	error: string | null;
 	stats: { toolCalls: number };
 	pipeline: PipelineState;
+	session: SessionState;
 }
 
 export const initialState: AgentState = {
@@ -72,6 +83,7 @@ export const initialState: AgentState = {
 	error: null,
 	stats: { toolCalls: 0 },
 	pipeline: { stages: [], activeIndex: null },
+	session: { taskId: null, sessionId: null, sessionFile: null },
 };
 
 export function agentReducer(state: AgentState = initialState, action: AgentAction): AgentState {
@@ -91,6 +103,34 @@ export function agentReducer(state: AgentState = initialState, action: AgentActi
 
 		case AGENT_TURN_STARTED:
 			return { ...state, turn: state.turn + 1, streamingText: "" };
+
+		case SESSION_OPENED:
+			return {
+				...state,
+				session: {
+					taskId: action.payload.taskId,
+					sessionId: action.payload.sessionId,
+					sessionFile: action.payload.sessionFile ?? null,
+				},
+			};
+
+		case SESSION_RESTORED:
+			// 启动重放：Session 里已有的历史整体替换本地投影，避免续跑时出现重复消息。
+			return {
+				...state,
+				messages: action.payload.messages,
+				status: "idle",
+				turn: 0,
+				streamingText: "",
+				tool: null,
+				error: null,
+				stats: { toolCalls: 0 },
+				pipeline: { stages: [], activeIndex: null },
+			};
+
+		case SESSION_DISPOSED:
+			if (state.session.taskId !== null && state.session.taskId !== action.payload.taskId) return state;
+			return { ...state, status: "idle", tool: null, session: { taskId: null, sessionId: null, sessionFile: null } };
 
 		case AGENT_TEXT_DELTA:
 			return { ...state, streamingText: state.streamingText + action.payload.text };

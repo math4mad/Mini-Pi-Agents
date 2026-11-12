@@ -24,6 +24,8 @@
 		"typescript": "^5.9.3"
 	},
 	"dependencies": {
+		"@earendil-works/pi-ai": "^1.5.2",
+		"@earendil-works/pi-coding-agent": "^1.5.2",
 		"@earendil-works/pi-tui": "^1.5.2",
 		"@redux-devtools/remote": "^1.0.2",
 		"graphql": "^16.15.0",

@@ -20,6 +20,9 @@ import {
 	agentEnded,
 	agentAborted,
 	agentInterrupt,
+	sessionOpened,
+	sessionRestored,
+	sessionDisposed,
 	type AgentAction,
 } from "./actions.ts";
 import type { AssistantMessage, Message, ToolCallContent } from "../types.ts";
@@ -259,6 +262,48 @@ describe("reducer", () => {
 		assert.strictEqual(state.turn, 2);
 		assert.strictEqual(state.messages.length, 3); // 1 user + 2 assistant
 		assert.strictEqual(state.streamingText, "");
+	});
+
+	test("SESSION_OPENED records task/session binding", () => {
+		const state = agentReducer(
+			initialState,
+			sessionOpened({ taskId: "task-1", sessionId: "session-1", sessionFile: "/tmp/s.jsonl" }),
+		);
+
+		assert.deepStrictEqual(state.session, {
+			taskId: "task-1",
+			sessionId: "session-1",
+			sessionFile: "/tmp/s.jsonl",
+		});
+	});
+
+	test("SESSION_RESTORED replaces history and resets transient state", () => {
+		let state = agentReducer(initialState, agentSubmit("old"));
+		state = agentReducer(state, agentTurnStarted());
+		state = agentReducer(state, agentTextDelta("partial"));
+		state = agentReducer(
+			state,
+			sessionRestored([
+				{ role: "user", content: "hi", timestamp: 1 },
+				{ role: "assistant", content: [{ type: "text", text: "你好" }], timestamp: 2, stopReason: "stop" },
+			]),
+		);
+
+		assert.strictEqual(state.messages.length, 2);
+		assert.strictEqual(state.status, "idle");
+		assert.strictEqual(state.turn, 0);
+		assert.strictEqual(state.streamingText, "");
+	});
+
+	test("SESSION_DISPOSED only clears the matching session", () => {
+		const opened = agentReducer(initialState, sessionOpened({ taskId: "task-1", sessionId: "session-1" }));
+
+		assert.strictEqual(agentReducer(opened, sessionDisposed("task-2")), opened);
+		assert.deepStrictEqual(agentReducer(opened, sessionDisposed("task-1")).session, {
+			taskId: null,
+			sessionId: null,
+			sessionFile: null,
+		});
 	});
 });
 

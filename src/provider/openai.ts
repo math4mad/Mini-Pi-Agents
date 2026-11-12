@@ -1,13 +1,31 @@
 /**
- * 最小 OpenAI 兼容流式客户端（当前用于 OpenRouter）。
+ * OpenAI 兼容的模型调用层，传输由 pi-ai 负责（当前用于 OpenRouter）。
  *
  * 职责：
- * - 把内部 Message[] 转成 OpenAI chat/completions 协议
- * - 解析 SSE，拼接文本增量和 tool_call 参数
+ * - 保持对内的 `CompletionRequest` / `AssistantMessage` 契约不变
+ * - 把内部 Message[] 转成 pi-ai 的 Context / Model
+ * - 消费 pi-ai 的流式事件，把文本增量回调给上层（TUI / Saga）
  * - 不抛异常：任何失败都以 stopReason "error"/"aborted" 的 AssistantMessage 返回
  */
 
-import type { AgentTool, AssistantContent, AssistantMessage, Message, Usage } from "../types.ts";
+import type {
+	AssistantMessage as PiAssistantMessage,
+	ImageContent,
+	JsonObject,
+	Message as PiMessage,
+	Model,
+	Tool as PiTool,
+	Usage as PiUsage,
+} from "@earendil-works/pi-ai";
+import { streamSimple } from "@earendil-works/pi-ai/api/openai-completions";
+import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
+import type {
+	AgentTool,
+	AssistantContent,
+	AssistantMessage,
+	Message,
+	Usage,
+} from "../types.ts";
 
 export interface CompletionRequest {
 	baseUrl: string;
@@ -21,123 +39,49 @@ export interface CompletionRequest {
 	onTextDelta?: (text: string) => void;
 }
 
-interface OpenAIToolCall {
-	id: string;
-	type: "function";
-	function: { name: string; arguments: string };
-}
-
-type OpenAITextPart = { type: "text"; text: string };
-type OpenAIImagePart = { type: "image_url"; image_url: { url: string } };
-
-type OpenAIMessage =
-	| { role: "system"; content: string }
-	| { role: "user"; content: string | Array<OpenAITextPart | OpenAIImagePart> }
-	| { role: "assistant"; content: string | null; tool_calls?: OpenAIToolCall[] }
-	| { role: "tool"; tool_call_id: string; content: string };
-
-interface OpenAIToolCallDelta {
-	index: number;
-	id?: string;
-	function?: { name?: string; arguments?: string };
-}
-
-interface OpenAIChunk {
-	choices?: Array<{
-		delta?: { content?: string | null; tool_calls?: OpenAIToolCallDelta[] };
-		finish_reason?: string | null;
-	}>;
-	usage?: {
-		prompt_tokens?: number;
-		completion_tokens?: number;
-		total_tokens?: number;
-	} | null;
-	error?: string | { message?: string };
-}
-
-interface StreamState {
-	text: string;
-	toolCalls: Map<number, { id: string; name: string; argumentsJson: string }>;
-	usage?: Usage;
-	finishReason: string;
-}
-
 export async function streamCompletion(request: CompletionRequest): Promise<AssistantMessage> {
-	const body = {
-		model: request.model,
-		messages: toOpenAIMessages(request),
-		stream: true,
-		stream_options: { include_usage: true },
-		...(request.tools.length > 0
-			? {
-					tools: request.tools.map((tool) => ({
-						type: "function" as const,
-						function: {
-							name: tool.name,
-							description: tool.description,
-							parameters: tool.parameters,
-						},
-					})),
-					tool_choice: "auto" as const,
-				}
-			: {}),
-	};
-
-	let response: Response;
+	let stream: ReturnType<typeof streamSimple>;
 	try {
-		response = await fetch(`${request.baseUrl}/chat/completions`, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				Authorization: `Bearer ${request.apiKey}`,
-			},
-			body: JSON.stringify(body),
+		const model = toPiModel(request);
+		stream = streamSimple(model, normalizeContext(toPiContext(request, model)), {
+			apiKey: request.apiKey,
 			signal: request.signal,
+			maxRetries: 2,
 		});
 	} catch (error) {
+		// pi-ai 在缺少鉴权等请求前置条件时会同步抛错。
 		return failedMessage(error, request.signal);
 	}
-
-	if (!response.ok) {
-		const detail = await response.text().catch(() => "");
-		const suffix = detail ? `: ${detail.slice(0, 2000)}` : "";
-		return failedMessage(new Error(`HTTP ${response.status} ${response.statusText}${suffix}`), request.signal);
-	}
-
-	if (!response.body) {
-		return failedMessage(new Error("响应体为空，无法读取流式数据"), request.signal);
-	}
-
-	const state: StreamState = {
-		text: "",
-		toolCalls: new Map(),
-		finishReason: "",
-	};
 
 	try {
-		await readSseStream(response.body, (chunk) => applyChunk(chunk, state, request.onTextDelta));
+		for await (const event of stream) {
+			if (event.type === "text_delta") request.onTextDelta?.(event.delta);
+		}
 	} catch (error) {
 		return failedMessage(error, request.signal);
 	}
 
-	const content: AssistantContent[] = [];
-	if (state.text.length > 0) {
-		content.push({ type: "text", text: state.text });
+	let final: PiAssistantMessage;
+	try {
+		final = await stream.result();
+	} catch (error) {
+		return failedMessage(error, request.signal);
 	}
 
-	for (const [index, call] of [...state.toolCalls.entries()].sort((a, b) => a[0] - b[0])) {
-		content.push({
-			type: "toolCall",
-			id: call.id || `call_${index}`,
-			name: call.name,
-			arguments: parseArguments(call.argumentsJson),
-		});
+	const aborted =
+		final.stopReason === "aborted" ||
+		(final.stopReason === "error" && request.signal?.aborted === true);
+	if (final.stopReason === "error" || aborted) {
+		return {
+			role: "assistant",
+			content: [],
+			timestamp: Date.now(),
+			stopReason: aborted ? "aborted" : "error",
+			errorMessage: final.errorMessage ?? (aborted ? "已取消本次请求" : "模型请求失败"),
+		};
 	}
 
-	const hasToolCalls = state.toolCalls.size > 0;
-	const stopReason =
-		state.finishReason === "length" ? "length" : hasToolCalls ? "toolUse" : "stop";
-
+	const content = toAssistantContent(final);
 	if (content.length === 0) {
 		return {
 			role: "assistant",
@@ -148,172 +92,138 @@ export async function streamCompletion(request: CompletionRequest): Promise<Assi
 		};
 	}
 
+	const hasToolCalls = content.some((block) => block.type === "toolCall");
 	return {
 		role: "assistant",
 		content,
 		timestamp: Date.now(),
-		stopReason,
-		...(state.usage ? { usage: state.usage } : {}),
+		stopReason: hasToolCalls ? "toolUse" : final.stopReason === "length" ? "length" : "stop",
+		...(final.usage ? { usage: toUsage(final.usage) } : {}),
 	};
 }
 
-function toOpenAIMessages(request: CompletionRequest): OpenAIMessage[] {
-	const messages: OpenAIMessage[] = [{ role: "system", content: request.systemPrompt }];
+function toPiModel(request: CompletionRequest): Model<"openai-completions"> {
+	return {
+		id: request.model,
+		name: request.model,
+		api: "openai-completions",
+		// provider 只影响兼容性探测与 OpenRouter 头信息，按 baseUrl 推断即可。
+		provider: request.baseUrl.includes("openrouter.ai") ? "openrouter" : "openai-compatible",
+		baseUrl: request.baseUrl.replace(/\/+$/, ""),
+		input: ["text", "image"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		reasoning: false,
+		contextWindow: 128_000,
+		maxTokens: 8_192,
+	};
+}
 
-	for (const message of request.messages) {
-		switch (message.role) {
-			case "user":
-				// 有图片时改用多模态 content 数组，文本放在图片前更利于模型理解任务。
-				if (message.images && message.images.length > 0) {
-					messages.push({
-						role: "user",
-						content: [
-							{ type: "text", text: message.content },
-							...message.images.map((url) => ({ type: "image_url" as const, image_url: { url } })),
-						],
-					});
-				} else {
-					messages.push({ role: "user", content: message.content });
-				}
-				break;
+function toPiContext(request: CompletionRequest, model: Model<"openai-completions">) {
+	const tools: PiTool[] = request.tools.map((tool) => ({
+		name: tool.name,
+		description: tool.description,
+		parameters: tool.parameters,
+	}));
+	return {
+		systemPrompt: request.systemPrompt,
+		messages: request.messages.map((message) => toPiMessage(message, model)),
+		tools,
+	};
+}
 
-			case "assistant": {
-				const text = message.content
-					.filter((part) => part.type === "text")
-					.map((part) => part.text)
-					.join("");
-				const toolCalls = message.content
-					.filter((part) => part.type === "toolCall")
-					.map((part) => ({
-						id: part.id,
-						type: "function" as const,
-						function: {
-							name: part.name,
-							arguments: JSON.stringify(part.arguments),
-						},
-					}));
-
-				messages.push({
-					role: "assistant",
-					content: text.length > 0 ? text : null,
-					...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
-				});
-				break;
+function toPiMessage(message: Message, model: Model<"openai-completions">): PiMessage {
+	switch (message.role) {
+		case "user": {
+			if (!message.images || message.images.length === 0) {
+				return { role: "user", content: message.content, timestamp: message.timestamp };
 			}
-
-			case "toolResult":
-				messages.push({
-					role: "tool",
-					tool_call_id: message.toolCallId,
-					content: message.content.map((part) => part.text).join("\n"),
-				});
-				break;
+			return {
+				role: "user",
+				content: [
+					{ type: "text", text: message.content },
+					...message.images.map(toImageContent),
+				],
+				timestamp: message.timestamp,
+			};
 		}
-	}
 
-	return messages;
-}
+		case "assistant":
+			return {
+				role: "assistant",
+				content: message.content.map(
+					(block): PiAssistantMessage["content"][number] =>
+						block.type === "text"
+							? { type: "text", text: block.text }
+							: {
+									type: "toolCall",
+									id: block.id,
+									name: block.name,
+									// 内部参数来自 JSON.parse，运行时必然是 JSON 对象。
+									arguments: block.arguments as unknown as JsonObject,
+								},
+				),
+				api: "openai-completions",
+				provider: model.provider,
+				model: model.id,
+				usage: zeroUsage(),
+				stopReason: message.stopReason,
+				timestamp: message.timestamp,
+			};
 
-function applyChunk(chunk: OpenAIChunk, state: StreamState, onTextDelta?: (text: string) => void): void {
-	if (chunk.error) {
-		const message = typeof chunk.error === "string" ? chunk.error : (chunk.error.message ?? "provider error");
-		throw new Error(message);
-	}
-
-	if (chunk.usage) {
-		state.usage = {
-			promptTokens: chunk.usage.prompt_tokens ?? 0,
-			completionTokens: chunk.usage.completion_tokens ?? 0,
-			totalTokens: chunk.usage.total_tokens ?? 0,
-		};
-	}
-
-	const choice = chunk.choices?.[0];
-	if (!choice) return;
-
-	const text = choice.delta?.content;
-	if (text) {
-		state.text += text;
-		onTextDelta?.(text);
-	}
-
-	for (const delta of choice.delta?.tool_calls ?? []) {
-		const existing = state.toolCalls.get(delta.index) ?? { id: "", name: "", argumentsJson: "" };
-		if (delta.id) existing.id = delta.id;
-		if (delta.function?.name) existing.name = delta.function.name;
-		if (delta.function?.arguments) existing.argumentsJson += delta.function.arguments;
-		state.toolCalls.set(delta.index, existing);
-	}
-
-	if (choice.finish_reason) {
-		state.finishReason = choice.finish_reason;
+		case "toolResult":
+			return {
+				role: "toolResult",
+				toolCallId: message.toolCallId,
+				toolName: message.toolName,
+				content: message.content,
+				isError: message.isError,
+				timestamp: message.timestamp,
+			};
 	}
 }
 
-/** 逐块读取 SSE，事件之间以空行分隔。 */
-async function readSseStream(
-	body: ReadableStream<Uint8Array>,
-	onChunk: (chunk: OpenAIChunk) => void,
-): Promise<void> {
-	const reader = body.getReader();
-	const decoder = new TextDecoder();
-	let buffer = "";
-
-	try {
-		while (true) {
-			const { done, value } = await reader.read();
-			if (done) break;
-
-			buffer += decoder.decode(value, { stream: true });
-
-			let separator = /\r?\n\r?\n/.exec(buffer);
-			while (separator) {
-				const rawEvent = buffer.slice(0, separator.index);
-				buffer = buffer.slice(separator.index + separator[0].length);
-				dispatchSseEvent(rawEvent, onChunk);
-				separator = /\r?\n\r?\n/.exec(buffer);
-			}
-		}
-
-		if (buffer.trim().length > 0) {
-			dispatchSseEvent(buffer, onChunk);
-		}
-	} finally {
-		reader.releaseLock();
-	}
+/** 内部图片统一是 data URL（见 index.ts 的 toDataUrl），pi-ai 需要 base64 + mimeType。 */
+function toImageContent(url: string): ImageContent {
+	const match = /^data:([^;,]+);base64,(.+)$/s.exec(url);
+	if (!match) throw new Error("图片仅支持 base64 data URL");
+	return { type: "image", data: match[2]!, mimeType: match[1]! };
 }
 
-function dispatchSseEvent(rawEvent: string, onChunk: (chunk: OpenAIChunk) => void): void {
-	for (const line of rawEvent.split("\n")) {
-		const trimmed = line.trim();
-		if (!trimmed.startsWith("data:")) continue;
-
-		const data = trimmed.slice("data:".length).trim();
-		if (data.length === 0 || data === "[DONE]") continue;
-
-		try {
-			onChunk(JSON.parse(data) as OpenAIChunk);
-		} catch (error) {
-			// JSON 解析失败通常是被中断的半行数据；provider 的真实错误会走 error 字段。
-			if (error instanceof SyntaxError) continue;
-			throw error;
+function toAssistantContent(message: PiAssistantMessage): AssistantContent[] {
+	const content: AssistantContent[] = [];
+	for (const block of message.content) {
+		if (block.type === "text") {
+			content.push({ type: "text", text: block.text });
+		} else if (block.type === "toolCall") {
+			content.push({
+				type: "toolCall",
+				id: block.id,
+				name: block.name,
+				arguments: { ...block.arguments } as Record<string, unknown>,
+			});
 		}
+		// thinking 等其它内容块不下发给 Agent 循环。
 	}
+	return content;
 }
 
-function parseArguments(raw: string): Record<string, unknown> {
-	if (raw.trim().length === 0) return {};
+function toUsage(usage: PiUsage): Usage {
+	return {
+		promptTokens: usage.input,
+		completionTokens: usage.output,
+		totalTokens: usage.totalTokens,
+	};
+}
 
-	try {
-		const parsed: unknown = JSON.parse(raw);
-		if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-			return parsed as Record<string, unknown>;
-		}
-	} catch {
-		// 参数被截断时返回空对象，让工具层以参数校验错误的形式反馈给模型。
-	}
-
-	return {};
+function zeroUsage(): PiUsage {
+	return {
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 0,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	};
 }
 
 function failedMessage(error: unknown, signal: AbortSignal | undefined): AssistantMessage {

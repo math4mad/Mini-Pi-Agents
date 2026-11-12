@@ -3,3 +3,5 @@ node_modules/
 .DS_Store
 # 临时密钥文件，禁止提交
 poc/tmp
+# pi Session 与本地模型配置（含运行期数据）
+.mini-pi/

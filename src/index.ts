@@ -10,9 +10,11 @@ import { attachTui } from "./cli/tui.ts";
 import { loadConfig } from "./config.ts";
 import { agentInterrupt, agentRetry, agentSubmit, workerStart } from "./store/actions.ts";
 import { loadDevtoolsEnhancer } from "./store/devtools.ts";
-import { createAgentStore } from "./store/index.ts";
+import { createAgentStore, type AgentStore } from "./store/index.ts";
 import { createRemoteSaga, createWorkerSaga } from "./store/remote.ts";
-import { createAgentSaga, type AgentRuntime } from "./store/sagas.ts";
+import { createSessionSaga } from "./store/session-saga.ts";
+import type { AgentRuntime } from "./store/sagas.ts";
+import { openSessionAdapter } from "./session/adapter.ts";
 import { createSandbox } from "./tools/sandbox.ts";
 
 const cwd = process.cwd();
@@ -33,6 +35,12 @@ argv.forEach((arg, index) => {
 	if (arg.startsWith("--image=")) imagePaths.push(arg.slice("--image=".length));
 });
 const images = imagePaths.filter((path) => path.length > 0).map(toDataUrl);
+/** 续跑：--resume <session.jsonl>，启动后先重放历史再接受新任务。 */
+const resumeIndex = argv.indexOf("--resume");
+const resumeFile =
+	resumeIndex >= 0
+		? argv[resumeIndex + 1]
+		: argv.find((arg) => arg.startsWith("--resume="))?.slice("--resume=".length);
 const workerFlagIndex = argv.indexOf("--worker");
 const workerId =
 	workerFlagIndex >= 0
@@ -71,7 +79,28 @@ const runtime: AgentRuntime = {
 	maxAttempts: 2,
 };
 
+/** 同一 Session 只能启用一套工具：按名字合并所有阶段的工具。 */
+function sessionTools(rt: AgentRuntime) {
+	const byName = new Map(rt.stages.flatMap((stage) => stage.tools).map((tool) => [tool.name, tool]));
+	return [...byName.values()];
+}
+
 // 远端模式只替换根 Saga，渲染层与 action 完全不变。
+// 本地模式改为 Session 驱动：同一任务内三个阶段是同一个 pi Session 的三次 prompt。
+let store: AgentStore;
+const localSaga = createSessionSaga(runtime, {
+	createDriver: (taskId) =>
+		openSessionAdapter({
+			cwd,
+			baseUrl: config.baseUrl,
+			apiKey: config.apiKey,
+			model: config.model,
+			taskId,
+			tools: sessionTools(runtime),
+			sessionFile: resumeFile,
+			dispatch: (action) => store.dispatch(action),
+		}),
+});
 const saga = workerId
 	? createWorkerSaga(runtime, {
 			url: graphqlUrl,
@@ -80,9 +109,9 @@ const saga = workerId
 		})
 	: remoteEnabled
 		? createRemoteSaga(runtime, { url: graphqlUrl })
-		: createAgentSaga(runtime);
+		: localSaga;
 
-const store = createAgentStore(runtime, {
+store = createAgentStore(runtime, {
 	enhancer: await loadDevtoolsEnhancer({ enabled: devtoolsEnabled, port: devtoolsPort }),
 	logger: loggerEnabled,
 	saga,
@@ -218,6 +247,12 @@ argv.forEach((arg, index) => {
 		return;
 	}
 	if (arg.startsWith("--image=")) skipped.add(index);
+	if (arg === "--resume") {
+		skipped.add(index);
+		skipped.add(index + 1);
+		return;
+	}
+	if (arg.startsWith("--resume=")) skipped.add(index);
 	if (arg === "--worker") {
 		skipped.add(index);
 		skipped.add(index + 1);
