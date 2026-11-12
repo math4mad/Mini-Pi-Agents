@@ -27,6 +27,8 @@ export interface UserMessage {
 	role: "user";
 	content: string;
 	timestamp: number;
+	/** 图片输入（data URL 或公网 URL），由 provider 转成多模态消息。 */
+	images?: string[];
 }
 
 export interface AssistantMessage {

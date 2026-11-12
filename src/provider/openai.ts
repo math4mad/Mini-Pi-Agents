@@ -27,9 +27,12 @@ interface OpenAIToolCall {
 	function: { name: string; arguments: string };
 }
 
+type OpenAITextPart = { type: "text"; text: string };
+type OpenAIImagePart = { type: "image_url"; image_url: { url: string } };
+
 type OpenAIMessage =
 	| { role: "system"; content: string }
-	| { role: "user"; content: string }
+	| { role: "user"; content: string | Array<OpenAITextPart | OpenAIImagePart> }
 	| { role: "assistant"; content: string | null; tool_calls?: OpenAIToolCall[] }
 	| { role: "tool"; tool_call_id: string; content: string };
 
@@ -160,7 +163,18 @@ function toOpenAIMessages(request: CompletionRequest): OpenAIMessage[] {
 	for (const message of request.messages) {
 		switch (message.role) {
 			case "user":
-				messages.push({ role: "user", content: message.content });
+				// 有图片时改用多模态 content 数组，文本放在图片前更利于模型理解任务。
+				if (message.images && message.images.length > 0) {
+					messages.push({
+						role: "user",
+						content: [
+							{ type: "text", text: message.content },
+							...message.images.map((url) => ({ type: "image_url" as const, image_url: { url } })),
+						],
+					});
+				} else {
+					messages.push({ role: "user", content: message.content });
+				}
 				break;
 
 			case "assistant": {

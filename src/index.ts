@@ -1,6 +1,8 @@
 /** CLI 入口：终端是唯一入口；状态全部走 Redux store，副作用全部走 Saga。 */
 
 import { stdin, stdout } from "node:process";
+import { readFileSync } from "node:fs";
+import { extname } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { createPipeline, createSingleStage } from "./agent/pipeline.ts";
 import { attachRenderer } from "./cli/renderer.ts";
@@ -20,6 +22,16 @@ const devtoolsEnabled = argv.includes("--devtools") || process.env.REDUX_DEVTOOL
 const singleAgent = argv.includes("--single");
 const exitOnIdle = argv.includes("--exit-on-idle");
 const remoteEnabled = argv.includes("--remote");
+/** 图片输入：--image <path>，可重复。读取后转成 data URL 交给多模态模型。 */
+const imagePaths: string[] = [];
+argv.forEach((arg, index) => {
+	if (arg === "--image") {
+		imagePaths.push(argv[index + 1] ?? "");
+		return;
+	}
+	if (arg.startsWith("--image=")) imagePaths.push(arg.slice("--image=".length));
+});
+const images = imagePaths.filter((path) => path.length > 0).map(toDataUrl);
 const workerFlagIndex = argv.indexOf("--worker");
 const workerId =
 	workerFlagIndex >= 0
@@ -92,7 +104,22 @@ function dispatchAndWait(action: Parameters<typeof store.dispatch>[0]): Promise<
 }
 
 function runPrompt(input: string): Promise<void> {
-	return dispatchAndWait(agentSubmit(input));
+	return dispatchAndWait(agentSubmit(input, images));
+}
+
+/** 读取本地图片并转成 data URL，避免依赖公网可访问地址。 */
+function toDataUrl(path: string): string {
+	const ext = extname(path).toLowerCase();
+	const mime =
+		ext === ".jpg" || ext === ".jpeg"
+			? "image/jpeg"
+			: ext === ".webp"
+				? "image/webp"
+				: ext === ".gif"
+					? "image/gif"
+					: "image/png";
+	const data = readFileSync(path).toString("base64");
+	return `data:${mime};base64,${data}`;
 }
 
 function runRetry(): Promise<void> {
@@ -164,6 +191,12 @@ argv.forEach((arg, index) => {
 		skipped.add(index);
 		return;
 	}
+	if (arg === "--image") {
+		skipped.add(index);
+		skipped.add(index + 1);
+		return;
+	}
+	if (arg.startsWith("--image=")) skipped.add(index);
 	if (arg === "--worker") {
 		skipped.add(index);
 		skipped.add(index + 1);
@@ -181,8 +214,10 @@ if (workerId) {
 	stdout.write(`Worker ${workerId} · ${graphqlUrl}${exitOnIdle ? " · 完成后退出" : ""}\n`);
 	await dispatchAndWait(workerStart());
 	shutdown(store.getState().status === "error" ? 1 : 0);
-} else if (oneShotInput.length > 0) {
-	await runOneShot(oneShotInput);
+} else if (oneShotInput.length > 0 || images.length > 0) {
+	await runOneShot(
+		oneShotInput.length > 0 ? oneShotInput : "识别图片中的手写表格，整理成规范的 CSV 数据。",
+	);
 } else if (tuiEnabled) {
 	await runTui();
 } else {
