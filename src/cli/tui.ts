@@ -23,6 +23,7 @@ import type { Message } from "../types.ts";
 import { agentInterrupt, agentRetry, agentSubmit } from "../store/actions.ts";
 import type { AgentState } from "../store/reducer.ts";
 import type { AgentStore } from "../store/index.ts";
+import { pingProvider } from "../provider/ping.ts";
 
 const dim = (text: string) => `\x1b[2m${text}\x1b[0m`;
 const cyan = (text: string) => `\x1b[36m${text}\x1b[0m`;
@@ -64,6 +65,8 @@ const MAX_TOOL_OUTPUT_CHARS = 1200;
 
 export interface TuiOptions {
 	model: string;
+	baseUrl: string;
+	apiKey: string;
 	cwd: string;
 }
 
@@ -98,6 +101,8 @@ class TuiView {
 	private lastStatus: AgentState["status"] = "idle";
 	private lastStatusText = "";
 	private renderedStage: string | null = null;
+	/** /ping 进行中：避免重复触发同一探测。 */
+	private pinging = false;
 	private finish?: () => void;
 	private unsubscribe?: () => void;
 
@@ -111,6 +116,7 @@ class TuiView {
 		this.editor = new Editor(this.tui, editorTheme);
 
 		this.tui.addChild(new Text(`${bold("Mini Pi Agents")} ${dim(`· ${options.model}`)}\n${dim(`cwd: ${options.cwd}`)}`));
+		this.tui.addChild(new Text(dim("/status 查看配置 · /ping 测试 provider · /exit 退出")));
 		this.tui.addChild(this.editor);
 		this.tui.addChild(this.statusLine);
 	}
@@ -122,8 +128,16 @@ class TuiView {
 			this.editor.onSubmit = (value: string) => {
 				const input = value.trim();
 				if (input.length === 0) return;
-				if (input === "exit" || input === "quit") {
+				if (input === "exit" || input === "quit" || input === "/exit") {
 					this.quit();
+					return;
+				}
+				if (input === "/status") {
+					this.showStatus();
+					return;
+				}
+				if (input === "/ping") {
+					void this.ping();
 					return;
 				}
 				if (this.store.getState().status === "running") return;
@@ -156,6 +170,41 @@ class TuiView {
 		this.unsubscribe?.();
 		this.tui.stop();
 		this.finish?.();
+	}
+
+	/** /status：只读当前配置，不触发任何请求；key 只露头尾。 */
+	private showStatus(): void {
+		const { model, baseUrl, apiKey, cwd } = this.options;
+		const maskedKey = apiKey.length > 8 ? `${apiKey.slice(0, 4)}…${apiKey.slice(-4)}` : "已配置";
+		const lines = [
+			bold("配置"),
+			`model:   ${model}`,
+			`baseUrl: ${baseUrl}`,
+			`apiKey:  ${maskedKey}`,
+			`cwd:     ${cwd}`,
+		];
+		this.insertBeforeEditor(new Text(lines.join("\n"), 1, 0));
+		this.tui.requestRender();
+	}
+
+	/** /ping：发一次 1 token 的请求，验证 key、baseUrl 与模型名。 */
+	private async ping(): Promise<void> {
+		if (this.pinging) return;
+		this.pinging = true;
+
+		const pending = new Text(dim(`⏳ 连接 ${this.options.baseUrl} …`), 1, 0);
+		this.insertBeforeEditor(pending);
+		this.tui.requestRender();
+
+		const result = await pingProvider(this.options);
+		pending.setText(
+			result.ok
+				? green(`✓ provider 可用 · ${result.ms}ms · ${result.detail}`)
+				: red(`✖ provider 不可用 · ${result.ms}ms · ${result.detail}`),
+		);
+
+		this.pinging = false;
+		this.tui.requestRender();
 	}
 
 	/** 把 store 状态增量投影到组件树。 */

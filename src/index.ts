@@ -195,7 +195,7 @@ async function runRepl(): Promise<void> {
 }
 
 async function runTui(): Promise<void> {
-	await attachTui(store, { model: config.model, cwd });
+	await attachTui(store, { model: config.model, baseUrl: config.baseUrl, apiKey: config.apiKey, cwd });
 	await shutdown(store.getState().status === "error" ? 1 : 0);
 }
 
