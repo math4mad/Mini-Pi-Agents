@@ -47,6 +47,7 @@ function fakeAdapter(taskId: string, sessionId: string): SessionAdapter & { disp
 		async prompt() {
 			return { text: "", stopReason: "stop" as const };
 		},
+		setTools() {},
 		async abort() {},
 		dispose() {
 			adapter.disposed = true;

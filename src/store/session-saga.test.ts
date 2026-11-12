@@ -7,10 +7,22 @@ import { createAgentStore } from "./index.ts";
 import type { AgentRuntime } from "./sagas.ts";
 import { createSessionSaga, type SessionDriver } from "./session-saga.ts";
 import type { SessionPromptOutcome } from "../session/adapter.ts";
-import type { StageRuntime } from "../types.ts";
+import type { AgentTool, StageRuntime } from "../types.ts";
 
 function stage(role: StageRuntime["role"], name: string): StageRuntime {
 	return { role, name, systemPrompt: `你是 ${name}`, tools: [] };
+}
+
+function tool(name: string): AgentTool {
+	return {
+		name,
+		label: name,
+		description: name,
+		parameters: {},
+		async execute() {
+			return { content: "" };
+		},
+	};
 }
 
 function createRuntime(): AgentRuntime {
@@ -29,31 +41,42 @@ function ok(text: string): SessionPromptOutcome {
 }
 
 /** 记录每次 prompt 属于哪个阶段，并返回预设结果。 */
-function createDriver(script: (stageName: string, index: number) => SessionPromptOutcome): {
+function createDriver(
+	script: (stageName: string, index: number) => SessionPromptOutcome,
+): {
 	driver: SessionDriver;
 	prompts: string[];
+	/** 每次 prompt 前启用的工具名。 */
+	activeTools: string[][];
 } {
 	const prompts: string[] = [];
+	const activeTools: string[][] = [];
 	return {
 		prompts,
+		activeTools,
 		driver: {
 			async prompt(text) {
 				prompts.push(text);
 				const stageName = /你是 (\w+)/.exec(text)?.[1] ?? "unknown";
 				return script(stageName, prompts.length);
 			},
+			setTools(toolNames) {
+				activeTools.push([...toolNames]);
+			},
 			async abort() {},
 		},
 	};
 }
 
-function boot(script: (stageName: string, index: number) => SessionPromptOutcome) {
-	const { driver, prompts } = createDriver(script);
-	const runtime = createRuntime();
+function boot(
+	script: (stageName: string, index: number) => SessionPromptOutcome,
+	runtime = createRuntime(),
+) {
+	const { driver, prompts, activeTools } = createDriver(script);
 	const store = createAgentStore(runtime, {
 		saga: createSessionSaga(runtime, { createDriver: async () => driver }),
 	});
-	return { store, prompts };
+	return { store, prompts, activeTools };
 }
 
 function run(store: ReturnType<typeof createAgentStore>, action: AgentAction): Promise<void> {
@@ -103,6 +126,23 @@ test("同一 Session 内 planner -> executor -> reviewer，打回后返工到 AP
 		["done", "done", "done"],
 	);
 	assert.strictEqual(state.messages.filter((message) => message.role === "user").length, 1);
+});
+
+test("每个阶段只启用自己声明的工具，planner / reviewer 拿不到写权限", async () => {
+	const runtime = createRuntime().stages.map((item) =>
+		item.role === "executor"
+			? { ...item, tools: [tool("read_file"), tool("write_file")] }
+			: { ...item, tools: [tool("read_file")] },
+	);
+	const { store, activeTools } = boot(() => ok("APPROVED"), { ...createRuntime(), stages: runtime });
+
+	await run(store, agentSubmit("实现一个功能"));
+
+	assert.deepStrictEqual(activeTools, [
+		["read_file"],
+		["read_file", "write_file"],
+		["read_file"],
+	]);
 });
 
 test("阶段返回错误时终止流水线并保留错误信息", async () => {

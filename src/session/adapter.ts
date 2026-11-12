@@ -61,6 +61,11 @@ export interface SessionAdapter {
 	sessionId: string;
 	sessionFile: string | undefined;
 	prompt(text: string, images?: string[]): Promise<SessionPromptOutcome>;
+	/**
+	 * 只启用指定工具。Session 只注册一套工具，阶段切换时用这个闸门限制权限，
+	 * 例如 planner / reviewer 只读、executor 可写。改动在下一次 turn 生效。
+	 */
+	setTools(toolNames: string[]): void;
 	abort(): Promise<void>;
 	dispose(): void;
 }
@@ -113,6 +118,9 @@ export async function openSessionAdapter(options: SessionAdapterOptions): Promis
 				};
 			}
 			return outcomeOf(session);
+		},
+		setTools(toolNames) {
+			session.setActiveToolsByName(toolNames);
 		},
 		async abort() {
 			await session.abort();

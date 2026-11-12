@@ -30,6 +30,8 @@ import {
 /** 编排层需要的 Session 能力，测试时注入假实现。 */
 export interface SessionDriver {
 	prompt(text: string, images?: string[]): Promise<SessionPromptOutcome>;
+	/** 切换当前阶段可用的工具；同一 Session 只能注册一套，靠这里收窄权限。 */
+	setTools(toolNames: string[]): void;
 	abort(): Promise<void>;
 }
 
@@ -230,6 +232,9 @@ function* runStagePrompt(
 ): Generator<any, StageResult, any> {
 	const stage = stages[index]!;
 	yield put(stageStarted({ index, role: stage.role, name: stage.name, attempt }));
+
+	// Planner / Reviewer 只拿到只读工具，只有 Executor 能写文件。
+	yield call([driver, "setTools"], stage.tools.map((tool) => tool.name));
 
 	const outcome = (yield call([driver, "prompt"], stagePrompt(stage, task, previousOutput), images)) as
 		| SessionPromptOutcome
