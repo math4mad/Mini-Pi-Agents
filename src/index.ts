@@ -13,6 +13,7 @@ import { loadDevtoolsEnhancer } from "./store/devtools.ts";
 import { createAgentStore } from "./store/index.ts";
 import { createRemoteSaga, createWorkerSaga } from "./store/remote.ts";
 import { createAgentSaga, type AgentRuntime } from "./store/sagas.ts";
+import { createSandbox } from "./tools/sandbox.ts";
 
 const cwd = process.cwd();
 const config = loadConfig();
@@ -48,11 +49,19 @@ if (workerFlagIndex >= 0 && !workerId) {
 	process.exit(2);
 }
 
+// 默认 docker；只有显式 SANDBOX_MODE=host 才允许在宿主上直接执行（开发用）。
+const sandboxMode = process.env.SANDBOX_MODE === "host" ? "host" : "docker";
+const sandbox = createSandbox({
+	mode: sandboxMode,
+	root: cwd,
+	image: process.env.SANDBOX_IMAGE,
+});
+
 const runtime: AgentRuntime = {
 	apiKey: config.apiKey,
 	baseUrl: config.baseUrl,
 	model: config.model,
-	stages: singleAgent ? [createSingleStage(cwd)] : createPipeline(cwd),
+	stages: singleAgent ? [createSingleStage(cwd, sandbox)] : createPipeline(cwd, sandbox),
 	maxTurns: 30,
 	maxAttempts: 2,
 };
@@ -82,6 +91,11 @@ if (devtoolsEnabled) {
 if (remoteEnabled && !workerId) {
 	stdout.write(`远端协调者: ${graphqlUrl}\n`);
 }
+stdout.write(
+	sandboxMode === "docker"
+		? `沙箱: docker · ${process.env.SANDBOX_IMAGE ?? "mini-pi-sandbox:node"}\n`
+		: "沙箱: host（未隔离，仅限开发）\n",
+);
 
 /** dispatch 一次任务，等 Saga 把状态带回非 running 再返回。 */
 function dispatchAndWait(action: Parameters<typeof store.dispatch>[0]): Promise<void> {
@@ -129,7 +143,7 @@ function runRetry(): Promise<void> {
 async function runOneShot(input: string): Promise<void> {
 	process.once("SIGINT", () => store.dispatch(agentInterrupt()));
 	await runPrompt(input);
-	shutdown(store.getState().status === "error" ? 1 : 0);
+	await shutdown(store.getState().status === "error" ? 1 : 0);
 }
 
 async function runRepl(): Promise<void> {
@@ -171,17 +185,18 @@ async function runRepl(): Promise<void> {
 		rl.close();
 	}
 
-	shutdown(store.getState().status === "error" ? 1 : 0);
+	await shutdown(store.getState().status === "error" ? 1 : 0);
 }
 
 async function runTui(): Promise<void> {
 	await attachTui(store, { model: config.model, cwd });
-	shutdown(store.getState().status === "error" ? 1 : 0);
+	await shutdown(store.getState().status === "error" ? 1 : 0);
 }
 
 /** DevTools 的 socket 会持续占用事件循环，启用时需要显式退出。 */
-function shutdown(code: number): void {
+async function shutdown(code: number): Promise<void> {
 	process.exitCode = code;
+	await sandbox.dispose().catch(() => {});
 	if (devtoolsEnabled) process.exit(code);
 }
 
@@ -213,7 +228,7 @@ const oneShotInput = argv
 if (workerId) {
 	stdout.write(`Worker ${workerId} · ${graphqlUrl}${exitOnIdle ? " · 完成后退出" : ""}\n`);
 	await dispatchAndWait(workerStart());
-	shutdown(store.getState().status === "error" ? 1 : 0);
+	await shutdown(store.getState().status === "error" ? 1 : 0);
 } else if (oneShotInput.length > 0 || images.length > 0) {
 	await runOneShot(
 		oneShotInput.length > 0 ? oneShotInput : "识别图片中的手写表格，整理成规范的 CSV 数据。",

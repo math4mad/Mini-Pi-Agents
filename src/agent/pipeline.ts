@@ -6,23 +6,24 @@
  */
 
 import { createFileTools } from "../tools/file-tools.ts";
+import type { Sandbox } from "../tools/sandbox.ts";
 import { createShellTool } from "../tools/shell-tool.ts";
 import type { StageRuntime } from "../types.ts";
 import { buildStageSystemPrompt, buildSystemPrompt } from "./prompt.ts";
 
 /** 单 Agent 模式：一个 executor 阶段，保持原有行为。 */
-export function createSingleStage(cwd: string): StageRuntime {
+export function createSingleStage(cwd: string, sandbox: Sandbox): StageRuntime {
 	return {
 		role: "executor",
 		name: "Agent",
 		systemPrompt: buildSystemPrompt(cwd),
-		tools: [...createFileTools(cwd), createShellTool(cwd)],
+		tools: [...createFileTools(sandbox), createShellTool(sandbox)],
 	};
 }
 
-export function createPipeline(cwd: string): StageRuntime[] {
-	const fileTools = createFileTools(cwd);
-	const shellTool = createShellTool(cwd);
+export function createPipeline(cwd: string, sandbox: Sandbox): StageRuntime[] {
+	const fileTools = createFileTools(sandbox);
+	const shellTool = createShellTool(sandbox);
 	// 只有 executor 能写文件，planner / reviewer 保持只读。
 	const readOnlyTools = fileTools.filter((tool) => tool.name !== "write_file");
 

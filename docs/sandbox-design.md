@@ -1,6 +1,8 @@
 # P0 执行沙箱：方案设计
 
-> 设计稿，未实现。目标是把 worker 内的工具执行限制在可控边界内。
+> 设计稿，已在 `feature/sandbox` 分支实现（最小可用版）。
+> 构建镜像：`docker build -f docker/sandbox-node.Dockerfile -t mini-pi-sandbox:node .`
+> 默认 `SANDBOX_MODE=docker`；开发调试可设 `SANDBOX_MODE=host`。
 
 ## 1. 问题
 

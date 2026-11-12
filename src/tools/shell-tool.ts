@@ -1,14 +1,13 @@
 /** 命令执行工具：让 Agent 能跑测试、类型检查等真实命令，而不是靠猜。 */
 
-import { exec } from "node:child_process";
-import { isAbsolute, resolve } from "node:path";
 import type { AgentTool } from "../types.ts";
+import type { Sandbox } from "./sandbox.ts";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
 const MAX_OUTPUT_CHARS = 10_000;
 
-export function createShellTool(cwd: string): AgentTool {
+export function createShellTool(sandbox: Sandbox): AgentTool {
 	return {
 		name: "run_command",
 		label: "Run command",
@@ -32,17 +31,20 @@ export function createShellTool(cwd: string): AgentTool {
 		},
 		execute: async (args, context) => {
 			const command = requireString(args, "command");
-			const rawCwd = typeof args.cwd === "string" && args.cwd.trim().length > 0 ? args.cwd : ".";
-			const workdir = isAbsolute(rawCwd) ? rawCwd : resolve(cwd, rawCwd);
+			const rawCwd = typeof args.cwd === "string" && args.cwd.trim().length > 0 ? args.cwd : undefined;
 			const timeout = clampTimeout(args.timeout_ms);
 
-			const result = await runCommand(command, workdir, timeout, context.signal);
+			const result = await sandbox.exec(command, {
+				cwd: rawCwd,
+				timeoutMs: timeout,
+				signal: context.signal,
+			});
 
 			if (result.aborted) {
 				return { content: `已取消：${command}`, isError: true };
 			}
 
-			const sections = [`$ ${command}`, `cwd: ${workdir}`, `exit: ${result.code ?? "signal"}`];
+			const sections = [`$ ${command}`, `exit: ${result.code ?? "signal"}`];
 			if (result.timedOut) {
 				sections.push(`[timed out after ${timeout}ms]`);
 			}
@@ -59,44 +61,6 @@ export function createShellTool(cwd: string): AgentTool {
 			};
 		},
 	};
-}
-
-interface CommandResult {
-	code: number | null;
-	stdout: string;
-	stderr: string;
-	timedOut: boolean;
-	aborted: boolean;
-}
-
-function runCommand(
-	command: string,
-	cwd: string,
-	timeout: number,
-	signal?: AbortSignal,
-): Promise<CommandResult> {
-	return new Promise((resolvePromise) => {
-		exec(
-			command,
-			{ cwd, timeout, maxBuffer: 10 * 1024 * 1024, signal },
-			(error, stdout, stderr) => {
-				const failure = error as (Error & { code?: number | string; killed?: boolean }) | null;
-
-				if (failure && failure.name === "AbortError") {
-					resolvePromise({ code: null, stdout, stderr, timedOut: false, aborted: true });
-					return;
-				}
-
-				resolvePromise({
-					code: failure ? (typeof failure.code === "number" ? failure.code : 1) : 0,
-					stdout,
-					stderr,
-					timedOut: Boolean(failure?.killed),
-					aborted: false,
-				});
-			},
-		);
-	});
 }
 
 function truncateOutput(text: string): string {

@@ -1,19 +1,18 @@
-/** 文件读写工具：最小但够一个编码 Agent 使用。 */
+/** 文件读写工具：最小但够一个编码 Agent 使用；所有路径都经沙箱校验。 */
 
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
 import type { AgentTool } from "../types.ts";
+import { resolveInside, type Sandbox } from "./sandbox.ts";
 
 /** 单次读取上限，避免把整个大文件塞进上下文。 */
 const MAX_READ_CHARS = 100_000;
 const MAX_LIST_ENTRIES = 200;
 const SKIPPED_DIRECTORIES = new Set(["node_modules", ".git"]);
 
-export function createFileTools(cwd: string): AgentTool[] {
-	return [createReadFileTool(cwd), createWriteFileTool(cwd), createListFilesTool(cwd)];
+export function createFileTools(sandbox: Sandbox): AgentTool[] {
+	return [createReadFileTool(sandbox), createWriteFileTool(sandbox), createListFilesTool(sandbox)];
 }
 
-function createReadFileTool(cwd: string): AgentTool {
+function createReadFileTool(sandbox: Sandbox): AgentTool {
 	return {
 		name: "read_file",
 		label: "Read file",
@@ -27,8 +26,7 @@ function createReadFileTool(cwd: string): AgentTool {
 			additionalProperties: false,
 		},
 		execute: async (args) => {
-			const absolutePath = resolvePath(cwd, requireString(args, "path"));
-			const content = await readFile(absolutePath, "utf8");
+			const content = await sandbox.readFile(requireString(args, "path"));
 
 			if (content.length > MAX_READ_CHARS) {
 				return {
@@ -41,7 +39,7 @@ function createReadFileTool(cwd: string): AgentTool {
 	};
 }
 
-function createWriteFileTool(cwd: string): AgentTool {
+function createWriteFileTool(sandbox: Sandbox): AgentTool {
 	return {
 		name: "write_file",
 		label: "Write file",
@@ -56,20 +54,19 @@ function createWriteFileTool(cwd: string): AgentTool {
 			additionalProperties: false,
 		},
 		execute: async (args) => {
-			const absolutePath = resolvePath(cwd, requireString(args, "path"));
+			const path = requireString(args, "path");
 			const content = requireString(args, "content", true);
 
-			await mkdir(dirname(absolutePath), { recursive: true });
-			await writeFile(absolutePath, content, "utf8");
+			await sandbox.writeFile(path, content);
 
 			return {
-				content: `Wrote ${Buffer.byteLength(content, "utf8")} bytes to ${displayPath(cwd, absolutePath)}`,
+				content: `Wrote ${Buffer.byteLength(content, "utf8")} bytes to ${displayPath(sandbox, path)}`,
 			};
 		},
 	};
 }
 
-function createListFilesTool(cwd: string): AgentTool {
+function createListFilesTool(sandbox: Sandbox): AgentTool {
 	return {
 		name: "list_files",
 		label: "List files",
@@ -86,39 +83,33 @@ function createListFilesTool(cwd: string): AgentTool {
 		},
 		execute: async (args) => {
 			const rawPath = args.path;
-			const relativePath = typeof rawPath === "string" && rawPath.trim().length > 0 ? rawPath : ".";
-			const absolutePath = resolvePath(cwd, relativePath);
-			const entries = await readdir(absolutePath, { withFileTypes: true });
+			const path = typeof rawPath === "string" && rawPath.trim().length > 0 ? rawPath : ".";
+			const entries = await sandbox.listDir(path);
 
 			const visible = entries
-				.filter((entry) => !(entry.isDirectory() && SKIPPED_DIRECTORIES.has(entry.name)))
+				.filter((entry) => !(entry.isDirectory && SKIPPED_DIRECTORIES.has(entry.name)))
 				.sort((a, b) => {
-					if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
+					if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
 					return a.name.localeCompare(b.name);
 				});
 
 			const lines = visible
 				.slice(0, MAX_LIST_ENTRIES)
-				.map((entry) => (entry.isDirectory() ? `${entry.name}/` : entry.name));
+				.map((entry) => (entry.isDirectory ? `${entry.name}/` : entry.name));
 
 			if (visible.length > MAX_LIST_ENTRIES) {
 				lines.push(`[truncated: ${visible.length - MAX_LIST_ENTRIES} more entries]`);
 			}
 
 			return {
-				content: `Directory: ${displayPath(cwd, absolutePath)}\n${lines.join("\n") || "(empty)"}`,
+				content: `Directory: ${displayPath(sandbox, path)}\n${lines.join("\n") || "(empty)"}`,
 			};
 		},
 	};
 }
 
-function resolvePath(cwd: string, path: string): string {
-	return isAbsolute(path) ? path : resolve(cwd, path);
-}
-
-function displayPath(cwd: string, absolutePath: string): string {
-	const relativePath = relative(cwd, absolutePath);
-	return relativePath.length > 0 ? relativePath : ".";
+function displayPath(sandbox: Sandbox, path: string): string {
+	return resolveInside(sandbox.root, path).relative;
 }
 
 function requireString(args: Record<string, unknown>, key: string, allowEmpty = false): string {
